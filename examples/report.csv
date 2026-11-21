@@ -1,0 +1,5 @@
+loja;id;tipo;competencia;data_venda;data_repasse;descricao;situacao;valor
+demo;T001;venda;01/11/2026;01/11/2026;;Venda fictícia;venda;100,00
+demo;T001;taxa;01/11/2026;01/11/2026;;Taxa fictícia;cobrada;-12,50
+demo;T001;desconto;01/11/2026;01/11/2026;;Desconto fictício;aplicado;-2,50
+demo;R001;repasse;01/11/2026;;07/11/2026;Repasse fictício;pago;85,00

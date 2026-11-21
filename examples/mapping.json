@@ -1,0 +1,22 @@
+{
+  "delimiter": ";",
+  "decimal_separator": ",",
+  "date_format": "%d/%m/%Y",
+  "columns": {
+    "account": "loja",
+    "transaction_id": "id",
+    "kind": "tipo",
+    "reference_date": "competencia",
+    "sale_date": "data_venda",
+    "payout_date": "data_repasse",
+    "description": "descricao",
+    "status": "situacao",
+    "amount": "valor"
+  },
+  "categories": {
+    "venda": "Vendas",
+    "taxa": "Taxas",
+    "desconto": "Descontos",
+    "repasse": "Repasses"
+  }
+}
