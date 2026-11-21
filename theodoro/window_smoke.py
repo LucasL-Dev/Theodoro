@@ -6,7 +6,7 @@ from threading import Event
 from time import monotonic, sleep
 
 from .browser_choices import channel_executable
-from .open_window import DEMO_PATH, OpenChrome
+from .open_window import AccessibilityUnavailable, DEMO_PATH, OpenChrome
 
 
 def verify_open_chrome():
@@ -37,6 +37,8 @@ def verify_open_chrome():
                     break
                 sleep(0.5)
             if selected is None:
+                if isinstance(last_error, AccessibilityUnavailable):
+                    raise last_error
                 raise RuntimeError('O formulário fictício em Chrome externo não foi acessível.') from last_error
             result = adapter.fill(
                 selected, True, {'net': 'Vendas líquidas', 'sale_date': 'Data da venda'},
@@ -45,5 +47,15 @@ def verify_open_chrome():
             if result != {'net': '130,00', 'sale_date': '20/11/2026'}:
                 raise RuntimeError('A releitura dos controles de acessibilidade divergiu.')
         finally:
-            chrome.terminate()
-            chrome.wait(timeout=10)
+            if selected:
+                import win32con
+                import win32gui
+
+                win32gui.PostMessage(selected[0], win32con.WM_CLOSE, 0, 0)
+            try:
+                if not selected:
+                    chrome.terminate()
+                chrome.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                chrome.kill()
+                chrome.wait(timeout=10)

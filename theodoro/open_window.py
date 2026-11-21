@@ -18,6 +18,22 @@ ADDRESS_NAMES = {
 ADDRESS_IDS = {'address and search bar', 'address edit', 'omnibox'}
 
 
+class AccessibilityUnavailable(ValueError):
+    """Selected Chrome did not expose enough native accessibility information."""
+
+
+def raw_children(control):
+    from pywinauto.controls.uiawrapper import UIAWrapper
+    from pywinauto.uia_defines import IUIA
+    from pywinauto.uia_element_info import UIAElementInfo
+
+    walker = IUIA().iuia.RawViewWalker
+    element = walker.GetFirstChildElement(control.element_info.element)
+    while element:
+        yield UIAWrapper(UIAElementInfo(element))
+        element = walker.GetNextSiblingElement(element)
+
+
 def approved_address(address, demo):
     try:
         address = address.strip()
@@ -90,28 +106,26 @@ class OpenChrome:
                 or executable is None or native_process_path(pid) != executable.resolve()):
             raise ValueError('A janela selecionada mudou. Selecione novamente o Chrome.')
         # Walk the browser UI only. A page input must never stand in for Chrome’s address bar.
-        waiting = list(window.children())
+        waiting = list(raw_children(window))
         addresses, documents = [], []
         while waiting:
             self.check()
             control = waiting.pop()
             info = control.element_info
-            if not control.is_visible():
-                continue
             if info.control_type == 'Document':
                 if not info.element.CurrentIsOffscreen:
                     documents.append(control)
                 continue
-            if info.control_type == 'Edit' and (
+            if info.control_type == 'Edit' and not info.element.CurrentIsOffscreen and (
                 info.name.casefold() in ADDRESS_NAMES or info.automation_id.casefold() in ADDRESS_IDS
             ):
                 if info.element.CurrentHasKeyboardFocus:
                     raise ValueError('Saia da barra de endereço e confira a página selecionada no Chrome.')
                 addresses.append(control.iface_value.CurrentValue)
             else:
-                waiting.extend(control.children())
+                waiting.extend(raw_children(control))
         if len(documents) != 1:
-            raise ValueError(f'O Chrome expôs {len(documents)} documentos ativos. Selecione uma janela com apenas a aba de destino visível.')
+            raise AccessibilityUnavailable(f'O Chrome expôs {len(documents)} documentos ativos. Selecione uma janela com apenas a aba de destino visível.')
         document = documents[0]
         # Chrome can shorten the accessible address bar text. The root Document's
         # accessibility value is provided by the browser and may retain its URL.
@@ -131,7 +145,7 @@ class OpenChrome:
         address = addresses[0] if addresses else ''
         approved = next((item for item in (document_address, address) if item and approved_address(item, demo)), None)
         if not approved:
-            raise ValueError(
+            raise AccessibilityUnavailable(
                 'A API de acessibilidade não confirmou o endereço esperado '
                 f'(barra detectada: {bool(addresses)}; URL no documento: {bool(document_address)}). '
                 'Abra a página correta e selecione a janela novamente.'
@@ -163,7 +177,7 @@ class OpenChrome:
         document, token = self.target(selected, demo)
         fields = sorted(self.fields(document))
         if not fields:
-            raise ValueError('Nenhum campo editável com nome acessível único e suporte a ValuePattern. Use o fluxo existente.')
+            raise AccessibilityUnavailable('Nenhum campo editável com nome acessível único e suporte a ValuePattern. Use o fluxo existente.')
         return fields, token
 
     def fill(self, selected, demo, mapping, summary, date_format, expected_target=None):
