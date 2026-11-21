@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 from playwright.sync_api import Error, TimeoutError, expect, sync_playwright
 
 from .assisted import (PICK, SAFE_FIELD, SAFE_NAVIGATION, amount_text, display_value, named_step, store_digest, validate_profile)
+from .browser_choices import BROWSERS, installed_channel
 from .daily import DailySummary, LABELS, format_amount
 
 ASSETS = Path(__file__).with_name('assets')
@@ -20,7 +21,11 @@ class Interrupted(Exception):
     pass
 
 
-class ChromiumUnavailable(Exception):
+class BrowserUnavailable(Exception):
+    pass
+
+
+class ChromiumUnavailable(BrowserUnavailable):
     pass
 
 
@@ -41,9 +46,11 @@ def chromium_executable(default, bundled_root, override):
 
 
 class Browser:
-    def __init__(self, stop, *, headless=False):
+    def __init__(self, stop, *, headless=False, choice='chromium'):
         self.stop = stop
         self.headless = headless
+        self.choice = choice
+        self.process = None
         self.playwright = None
         self.context = None
         self.pages = {}
@@ -52,34 +59,62 @@ class Browser:
         self.preview_pages = set()
 
     def start(self):
-        if self.context is not None:
+        if self.context is not None and self.process.is_connected():
             return
+        if self.playwright is not None:
+            self.close()
 
+        if self.choice not in BROWSERS:
+            raise ValueError('Navegador selecionado inválido.')
+        label = BROWSERS[self.choice]
+        if self.choice != 'chromium' and not installed_channel(self.choice):
+            raise BrowserUnavailable(f'{label} não encontrado nos locais de instalação do canal estável.')
         bundled_root = None
-        if getattr(sys, 'frozen', False):
+        if self.choice == 'chromium' and getattr(sys, 'frozen', False):
             bundled_root = (Path(sys._MEIPASS) / 'browsers').resolve()
             os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(bundled_root)
         try:
             self.playwright = sync_playwright().start()
             chromium = self.playwright.chromium
-            self.executable = chromium_executable(
-                chromium.executable_path, bundled_root, os.environ.get('THEODORO_CHROMIUM'),
-            )
-            # Pass the full browser explicitly so even headless checks use the shipped executable.
-            browser = chromium.launch(
-                headless=self.headless, executable_path=str(self.executable), timeout=15000,
-            )
-            self.context = browser.new_context(accept_downloads=False, service_workers="block")
+            if self.choice == 'chromium':
+                self.executable = chromium_executable(
+                    chromium.executable_path, bundled_root, os.environ.get('THEODORO_CHROMIUM'),
+                )
+                launch_options = {'executable_path': str(self.executable)}
+            else:
+                launch_options = {'channel': self.choice}
+            self.process = chromium.launch(headless=self.headless, timeout=15000, **launch_options)
+            self.context = self.process.new_context(accept_downloads=False, service_workers='block')
             self.context.set_default_timeout(5000)
         except Error as error:
             self.close()
-            raise ChromiumUnavailable(
-                'O Chromium não conseguiu iniciar. Confira se o pacote foi extraído por completo '
-                'e se o Windows permite executar os arquivos da distribuição.'
+            raise BrowserUnavailable(
+                f'{label} não conseguiu iniciar. Use Testar navegador para ver os detalhes.'
             ) from error
         except Exception:
             self.close()
             raise
+
+    def diagnose(self):
+        self.check()
+        self.start()
+        page = self.context.new_page()
+        try:
+            page.route('**/*', lambda route: route.abort())
+            page.set_content("""
+                <label>Valor fictício <input></label>
+                <button onclick="document.querySelector('output').textContent =
+                                 document.querySelector('input').value">Conferir</button>
+                <output></output>
+            """)
+            field = page.get_by_label('Valor fictício')
+            field.fill('42,50')
+            page.get_by_role('button', name='Conferir').click()
+            if field.input_value() != '42,50' or page.locator('output').inner_text() != '42,50':
+                raise ValueError('O valor lido na página de diagnóstico divergiu do preenchido.')
+            return self.process.version
+        finally:
+            page.close()
 
     def check(self):
         if self.stop.is_set():
@@ -408,8 +443,14 @@ class Browser:
         self.pages.clear()
         self.preview_pages.clear()
         self.prepared = None
+        self.executable = None
         if self.playwright:
             try:
-                self.playwright.stop()
+                if self.process and self.process.is_connected():
+                    self.process.close()
             finally:
-                self.playwright = None
+                self.process = None
+                try:
+                    self.playwright.stop()
+                finally:
+                    self.playwright = None

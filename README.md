@@ -15,6 +15,14 @@ Os valores usam centavos inteiros. A conciliação compara vendas brutas, taxas 
 
 O histórico fica em `%LOCALAPPDATA%\Theodoro\history.sqlite` no Windows. O aplicativo reaproveita o formato de histórico do commit inicial e, se iniciado da raiz do projeto, importa `data/history.sqlite` na primeira execução. Use `THEODORO_DB` para indicar um caminho específico. A CLI de CSV continua disponível para conferência offline, com `python main.py --help`.
 
+## Escolher o navegador e gerenciar a sessão
+
+Na aba **Automação**, a configuração **Navegador** oferece Google Chrome, Microsoft Edge e Chromium integrado. Na primeira abertura, o Theodoro prefere o Chrome se encontrar a instalação estável do Windows. A escolha posterior é salva localmente em `browser.json`. Chrome e Edge usam os canais oficiais do Playwright. Se o canal escolhido estiver ausente ou impedido de iniciar, selecione o Chromium integrado ou confira a instalação estável. O diagnóstico informa qual opção falhou.
+
+Use **Testar navegador** para verificar a inicialização, o clique, o preenchimento e a leitura em uma página fictícia local. O teste não abre portais e mantém as abas da sessão atual. As sessões do Theodoro são temporárias e separadas do perfil pessoal. Faça login manualmente no navegador aberto pelo aplicativo, incluindo CAPTCHA ou MFA quando o portal solicitar. Trocar de navegador, clicar em **Fechar sessão** ou **Reiniciar sessão** encerra as sessões do Theodoro. A próxima sessão começa sem os cookies da anterior.
+
+Se um portal continuar bloqueando o acesso, mantenha o uso de relatórios exportados do iFood e teste o preenchimento assistido no Premier quando houver uma sessão autorizada. O teste local do navegador verifica os controles do Playwright e não confirma acesso aos portais.
+
 ## Importar um relatório do iFood
 
 1. Baixe o relatório na sua conta autorizada do iFood e abra a aba **Importar iFood** no Theodoro. Use **Abrir CSV ou XLSX**. Em Excel, selecione a aba financeira. Para CSV, ajuste o separador se a prévia aparecer em uma só coluna.

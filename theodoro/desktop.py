@@ -18,7 +18,8 @@ from financeiro.mapping import Entry
 from financeiro.sync import History
 
 from .assisted import STEPS, save_profile, scope_step, set_step
-from .browser import Browser, ChromiumUnavailable, Interrupted
+from .browser import Browser, BrowserUnavailable, Interrupted
+from .browser_choices import BROWSERS, default_browser
 from .daily import LABELS, format_amount
 from .import_tab import ImportTab
 
@@ -48,9 +49,9 @@ class Worker(QObject):
     progress = Signal(int, str)
     done = Signal(str, object)
 
-    def __init__(self, stop, db_path):
+    def __init__(self, stop, db_path, browser_choice):
         super().__init__()
-        self.browser = Browser(stop)
+        self.browser = Browser(stop, choice=browser_choice)
         self.history = History(db_path)
         self.summary = None
 
@@ -69,11 +70,11 @@ class Worker(QObject):
             result = self.run_action(action, options)
         except Interrupted:
             result = {'error': 'Operação interrompida pelo usuário.'}
-        except ChromiumUnavailable as error:
+        except BrowserUnavailable as error:
             result = {'error': str(error)}
         except PlaywrightError:
             self.browser.close()
-            result = {'error': 'Falha no Chromium, na conexão ou no controle da página. Confira o navegador e o perfil.'}
+            result = {'error': 'Falha no navegador, na conexão ou no controle da página. Confira o navegador e o perfil.'}
         except (KeyError, TypeError, OSError):
             result = {'error': 'Configuração, arquivo ou credencial indisponível.'}
         except ValueError as error:
@@ -93,6 +94,25 @@ class Worker(QObject):
         self.done.emit(action, result)
 
     def run_action(self, action, options):
+        if action in {'browser_switch', 'browser_close', 'browser_restart'}:
+            self.browser.close()
+            self.summary = None
+            if action == 'browser_switch':
+                self.browser.choice = options
+                return {'message': f'{BROWSERS[options]} selecionado. Faça login ao abrir um portal.'}
+            if action == 'browser_restart':
+                self.browser.start()
+                self.browser.context.new_page()
+                return {'message': 'Nova sessão isolada iniciada. Faça login novamente nos portais.'}
+            return {'message': 'Sessão fechada.'}
+        if action == 'browser_test':
+            try:
+                version = self.browser.diagnose()
+            except (BrowserUnavailable, PlaywrightError, ValueError) as error:
+                cause = error.__cause__
+                detail = '\n'.join(str(cause or error).splitlines()[:8])
+                return {'error': f'{BROWSERS[self.browser.choice]}: diagnóstico falhou.\n{detail}'}
+            return {'message': f'{BROWSERS[self.browser.choice]} {version}: iniciou e passou em clique, preenchimento e leitura.'}
         if action == 'credentials':
             vault().set_password('Theodoro.Premier', 'operator', json.dumps(options))
             return {'message': 'Credencial armazenada no Gerenciador de Credenciais do Windows.'}
@@ -189,6 +209,13 @@ class Window(QMainWindow):
         self.busy = False
         self.pending = False
         self.config_dir = Path(path).parent
+        self.browser_settings = self.config_dir / 'browser.json'
+        try:
+            browser_choice = json.loads(self.browser_settings.read_text(encoding='utf-8')).get('browser')
+        except (OSError, ValueError, AttributeError):
+            browser_choice = None
+        if not isinstance(browser_choice, str) or browser_choice not in BROWSERS:
+            browser_choice = default_browser()
         self.profile_path = self.config_dir / 'automation.json'
         self.profiles = {}
         for demo, name in ((False, 'automation.json'), (True, 'automation-demo.json')):
@@ -198,7 +225,7 @@ class Window(QMainWindow):
                 self.profiles[demo] = {}
         self.capture_target = None
         self.requests = Queue()
-        self.worker = Worker(self.stop, path)
+        self.worker = Worker(self.stop, path, browser_choice)
         self.worker.progress.connect(self.update_progress, Qt.ConnectionType.QueuedConnection)
         self.worker.done.connect(self.completed, Qt.ConnectionType.QueuedConnection)
         self.thread = Thread(target=self.worker.serve, args=(self.requests,), name='TheodoroBrowser')
@@ -243,6 +270,19 @@ class Window(QMainWindow):
         settings = QHBoxLayout()
         layout.addLayout(settings)
         self.add_button(settings, 'Guardar credencial do Premier', self.set_credentials)
+        browser_row = QHBoxLayout()
+        layout.addLayout(browser_row)
+        browser_row.addWidget(QLabel('Navegador'))
+        self.browser_choice = QComboBox()
+        self.browser_choice.setToolTip('Trocar de navegador encerra a sessão aberta do Theodoro.')
+        for key, label in BROWSERS.items():
+            self.browser_choice.addItem(label, key)
+        self.browser_choice.setCurrentIndex(self.browser_choice.findData(browser_choice))
+        self.browser_choice.currentIndexChanged.connect(self.change_browser)
+        browser_row.addWidget(self.browser_choice)
+        self.add_button(browser_row, 'Testar navegador', lambda: self.dispatch('browser_test', None))
+        self.add_button(browser_row, 'Fechar sessão', lambda: self.reset_browser('browser_close'))
+        self.add_button(browser_row, 'Reiniciar sessão', lambda: self.reset_browser('browser_restart'))
         actions = QHBoxLayout()
         layout.addLayout(actions)
         self.add_button(actions, 'Iniciar simulação', self.start)
@@ -283,6 +323,7 @@ class Window(QMainWindow):
         self.config_format.setEnabled(not self.busy and self.config_portal.currentData() == 'ifood')
         self.config_input_format.setEnabled(not self.busy)
         self.config_no_save.setEnabled(not self.busy and self.config_portal.currentData() == 'premier')
+        self.browser_choice.setEnabled(not self.busy)
         self.import_tab.set_busy(self.busy)
         self.cancel_button.setEnabled(self.busy or self.pending)
         self.approve.setEnabled(self.pending and not self.busy)
@@ -294,6 +335,24 @@ class Window(QMainWindow):
         self.busy = True
         self.update_controls()
         self.requests.put((action, options))
+
+    def change_browser(self):
+        choice = self.browser_choice.currentData()
+        try:
+            save_profile(self.browser_settings, {'browser': choice})
+        except OSError:
+            self.message.setText('Não foi possível salvar a escolha do navegador.')
+            self.browser_choice.blockSignals(True)
+            self.browser_choice.setCurrentIndex(self.browser_choice.findData(self.worker.browser.choice))
+            self.browser_choice.blockSignals(False)
+            return
+        self.reset_browser('browser_switch', choice)
+
+    def reset_browser(self, action, choice=None):
+        self.pending = False
+        for label in self.connection_labels.values():
+            label.setText('Sessão a verificar')
+        self.dispatch(action, choice)
 
     def start(self):
         self.pending = False

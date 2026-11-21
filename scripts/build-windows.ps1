@@ -40,8 +40,17 @@ try {
     }
     $report = Get-Content -LiteralPath $reportPath -Encoding utf8 -Raw
     Write-Host $report
-    if ($process.ExitCode -ne 0 -or ($report | ConvertFrom-Json).status -ne 'passed') {
-        throw 'O Chromium não iniciou com o pacote final do Theodoro.'
+    $diagnostics = $report | ConvertFrom-Json
+    if ($process.ExitCode -ne 0 -or $diagnostics.status -ne 'passed') {
+        throw 'O diagnóstico de navegadores falhou no pacote final do Theodoro.'
+    }
+    if ($env:GITHUB_STEP_SUMMARY) {
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value '### Diagnóstico no Theodoro.exe'
+        foreach ($entry in $diagnostics.navegadores.PSObject.Properties) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value (
+                "- $($entry.Name): $($entry.Value.status) $($entry.Value.versao)".TrimEnd()
+            )
+        }
     }
 }
 finally {

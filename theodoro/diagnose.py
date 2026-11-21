@@ -4,7 +4,7 @@ from threading import Event
 
 from playwright.sync_api import Error
 
-from .browser import Browser, ChromiumUnavailable, URLS
+from .browser import Browser, BrowserUnavailable, URLS
 
 
 def main():
@@ -14,7 +14,7 @@ def main():
     browser = Browser(Event())
     try:
         browser.inspect(args.portal)
-    except ChromiumUnavailable as error:
+    except BrowserUnavailable as error:
         parser.exit(1, f'{error}\n')
     except Error:
         parser.exit(1, 'O Chromium ou o portal não pôde ser aberto.\n')
