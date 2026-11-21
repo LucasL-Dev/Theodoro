@@ -1,0 +1,7 @@
+Relatório fictício do iFood
+Estabelecimento;Identificador do registro;Data da venda;Data de competência;Data de recebimento;Vendas brutas;Taxas e comissões;Descontos e ajustes;Vendas líquidas;Repasses recebidos
+LOJA-A;A1;20/11/2026;21/11/2026;;100,00;-10,00;-5,00;85,00;
+LOJA-A;A2;20/11/2026;21/11/2026;;50,00;-5,00;0,00;45,00;
+LOJA-A;R1;;;20/11/2026;;;;;80,00
+LOJA-B;B1;20/11/2026;20/11/2026;;200,00;-30,00;-10,00;160,00;
+TOTAL GERAL;;;;;350,00;-45,00;-15,00;290,00;80,00

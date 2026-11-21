@@ -20,6 +20,7 @@ from financeiro.sync import History
 from .assisted import STEPS, save_profile, scope_step, set_step
 from .browser import Browser, ChromiumUnavailable, Interrupted
 from .daily import LABELS, format_amount
+from .import_tab import ImportTab
 
 
 def vault():
@@ -120,6 +121,25 @@ class Worker(QObject):
         if action == 'config_check':
             self.browser.test_selector(*options)
             return {'message': 'Controle único e visível na página atual.'}
+        if action == 'import_connect':
+            self.browser.configuration_page('premier', False)
+            return {'message': 'Conclua o login manualmente no Chromium e volte à tela inicial autenticada.'}
+        if action == 'import_fill':
+            import_id, summary, spec, demo = options
+            self.summary = None
+            try:
+                self.browser.premier_preview(summary, spec, demo)
+            except Exception:
+                self.history.record('ifood_premier', {
+                    'importacao': import_id, 'estabelecimento': summary['store'],
+                    'dia': summary['day'], 'simulacao': demo, 'premier': 'falha',
+                })
+                raise
+            self.history.record('ifood_premier', {
+                'importacao': import_id, 'estabelecimento': summary['store'],
+                'dia': summary['day'], 'simulacao': demo, 'premier': 'preenchimento_conferido',
+            })
+            return {'message': 'Campos preenchidos e conferidos. Nenhum lançamento foi salvo.'}
         if action == 'real_test':
             day, profile, demo = options
             self.summary = None
@@ -187,6 +207,10 @@ class Window(QMainWindow):
         tabs = QTabWidget()
         self.setCentralWidget(tabs)
         operation, history = QWidget(), QWidget()
+        self.import_tab = ImportTab(
+            self.history, self.fill_import, lambda: self.dispatch('import_connect', None), self.refresh_history,
+        )
+        tabs.addTab(self.import_tab, 'Importar iFood')
         tabs.addTab(operation, 'Automação')
         self.config_tab = QWidget()
         tabs.addTab(self.config_tab, 'Configurar automação')
@@ -259,6 +283,7 @@ class Window(QMainWindow):
         self.config_format.setEnabled(not self.busy and self.config_portal.currentData() == 'ifood')
         self.config_input_format.setEnabled(not self.busy)
         self.config_no_save.setEnabled(not self.busy and self.config_portal.currentData() == 'premier')
+        self.import_tab.set_busy(self.busy)
         self.cancel_button.setEnabled(self.busy or self.pending)
         self.approve.setEnabled(self.pending and not self.busy)
 
@@ -418,6 +443,16 @@ class Window(QMainWindow):
         self.persist_config(demo)
         self.refresh_config()
 
+    def fill_import(self, import_id, summary, demo):
+        self.pending = False
+        spec = self.profiles[False].get('premier', {})
+        if demo:
+            demo_profile = Path(__file__).with_name('assets') / 'profile.demo.json'
+            spec = json.loads(demo_profile.read_text(encoding='utf-8'))['premier']
+            spec.update(ready='h1', form='form', allow_unsaved_fill=True)
+        self.import_tab.status.setText('Preenchendo e conferindo o formulário no Chromium…')
+        self.dispatch('import_fill', (import_id, summary, spec, demo))
+
     def test_integration(self, demo):
         self.pending = False
         self.preview.clear()
@@ -451,7 +486,9 @@ class Window(QMainWindow):
     @Slot(str, object)
     def completed(self, action, result):
         self.busy = False
-        if 'error' in result:
+        if action in {'import_fill', 'import_connect'}:
+            self.import_tab.status.setText(result.get('error') or result['message'])
+        elif 'error' in result:
             if action.startswith('config_') or action == 'real_test':
                 self.config_message.setText(result['error'])
             if action in self.connection_labels:

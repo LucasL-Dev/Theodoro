@@ -26,6 +26,7 @@ STEPS = {
         'open': 'Adicionar clique de navegação',
         'form': 'Marcador do formulário de lançamento',
         'fields.sale_date': 'Campo de data da venda',
+        'fields.competence_date': 'Campo de data da competência',
         'fields.receipt_date': 'Campo de data do recebimento',
         **{f'fields.{key}': f'Campo de {label.lower()}' for key, label in LABELS.items()},
     },

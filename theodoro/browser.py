@@ -203,75 +203,95 @@ class Browser:
         validate_profile(profile)
         date_style = profile['ifood'].get('result_date_format', 'iso')
         expected_day = '/'.join(reversed(day.split('-'))) if date_style == 'br' else day
-        summary = None
-        for portal, percent in (('ifood', 20), ('premier', 65)):
-            progress(percent, f'Executando configuração de {portal}')
-            spec = profile[portal]
-            page = self.configuration_page(portal, demo)
-            if portal == 'premier' and not demo:
-                self.preview_pages.add(page)
+        portal = 'ifood'
+        progress(20, 'Executando configuração de iFood')
+        spec = profile[portal]
+        page = self.configuration_page(portal, demo)
 
-            def control(selector):
-                if not demo:
-                    self.check_origin(page, portal)
-                return self.control(page, selector)
+        def control(selector):
+            if not demo:
+                self.check_origin(page, portal)
+            return self.control(page, selector)
 
-            with named_step(f'{portal}: tela inicial autenticada'):
-                expect(control(spec['ready'])).to_be_visible(timeout=5000)
-            for index, selector in enumerate(spec['open'], 1):
-                with named_step(f'{portal}: navegação {index}'):
-                    step = control(selector)
-                    if not step.evaluate(SAFE_NAVIGATION):
-                        raise ValueError(f'{portal}: navegação {index} não é um controle seguro.')
-                    step.click()
-            if portal == 'ifood':
-                def verify_store():
-                    with named_step('iFood: estabelecimento'):
-                        if store_digest(display_value(control(spec['store']))) != spec['store_digest']:
-                            raise ValueError('iFood: estabelecimento diferente do selecionado na configuração.')
+        with named_step(f'{portal}: tela inicial autenticada'):
+            expect(control(spec['ready'])).to_be_visible(timeout=5000)
+        for index, selector in enumerate(spec['open'], 1):
+            with named_step(f'{portal}: navegação {index}'):
+                step = control(selector)
+                if not step.evaluate(SAFE_NAVIGATION):
+                    raise ValueError(f'{portal}: navegação {index} não é um controle seguro.')
+                step.click()
+        def verify_store():
+            with named_step('iFood: estabelecimento'):
+                if store_digest(display_value(control(spec['store']))) != spec['store_digest']:
+                    raise ValueError('iFood: estabelecimento diferente do selecionado na configuração.')
 
-                verify_store()
-                for field, label in (('sale_date', 'vendas'), ('receipt_date', 'recebimentos')):
-                    with named_step(f'iFood: filtro da data de {label}'):
-                        date_field = control(spec[field])
-                        if not date_field.evaluate(SAFE_FIELD):
-                            raise ValueError(f'iFood: filtro da data de {label} inválido.')
-                        value = day
-                        if date_field.get_attribute('type') != 'date' and spec.get('input_date_format') == 'br':
-                            value = '/'.join(reversed(day.split('-')))
-                        date_field.fill(value)
-                        expect(date_field).to_have_value(value)
-                with named_step('iFood: consultar'):
-                    control(spec['query']).click()
-                for field, label in (('confirmed_sale_date', 'vendas'), ('confirmed_receipt_date', 'recebimentos')):
-                    with named_step(f'iFood: data de {label} no resultado'):
-                        expect(control(spec[field])).to_have_text(expected_day, timeout=10000)
-                verify_store()
-                values = {}
-                for key, label in LABELS.items():
-                    with named_step(f'iFood: {label}'):
-                        value = control(spec['totals'][key])
-                        value.wait_for(state='visible')
-                        values[key] = amount_text(value.inner_text().strip())
-                summary = DailySummary.parse(day, values, spec.get('fee_sign', 1), spec.get('adjustment_sign', 1))
-            else:
-                with named_step('Premier: formulário financeiro'):
-                    expect(control(spec['form'])).to_be_visible(timeout=5000)
-                form = control(spec['form'])
-                with named_step('Premier: mapeamento do formulário'):
-                    if not form.evaluate(
-                        '(form, selectors) => selectors.every(selector => form.contains(document.querySelector(selector)))',
-                        list(spec['fields'].values()),
-                    ):
-                        raise ValueError('Premier: recapture os campos dentro do formulário configurado.')
-                self.fill_preview(page, spec['fields'], summary, date_format=spec.get('input_date_format'))
-                with named_step('Premier: campos obrigatórios'):
-                    if not form.evaluate("""element =>
-                        [...element.querySelectorAll('input,select,textarea')]
-                        .every(field => !field.willValidate || field.validity.valid)"""):
-                        raise ValueError('Premier: o formulário tem campos obrigatórios vazios ou inválidos.')
+        verify_store()
+        for field, label in (('sale_date', 'vendas'), ('receipt_date', 'recebimentos')):
+            with named_step(f'iFood: filtro da data de {label}'):
+                date_field = control(spec[field])
+                if not date_field.evaluate(SAFE_FIELD):
+                    raise ValueError(f'iFood: filtro da data de {label} inválido.')
+                value = day
+                if date_field.get_attribute('type') != 'date' and spec.get('input_date_format') == 'br':
+                    value = '/'.join(reversed(day.split('-')))
+                date_field.fill(value)
+                expect(date_field).to_have_value(value)
+        with named_step('iFood: consultar'):
+            control(spec['query']).click()
+        for field, label in (('confirmed_sale_date', 'vendas'), ('confirmed_receipt_date', 'recebimentos')):
+            with named_step(f'iFood: data de {label} no resultado'):
+                expect(control(spec[field])).to_have_text(expected_day, timeout=10000)
+        verify_store()
+        values = {}
+        for key, label in LABELS.items():
+            with named_step(f'iFood: {label}'):
+                value = control(spec['totals'][key])
+                value.wait_for(state='visible')
+                values[key] = amount_text(value.inner_text().strip())
+        summary = DailySummary.parse(day, values, spec.get('fee_sign', 1), spec.get('adjustment_sign', 1))
+        progress(65, 'Executando configuração do Premier')
+        self.premier_preview(self.summary_values(summary), profile['premier'], demo)
         progress(100, 'Prévia conferida. Nenhum lançamento foi salvo.')
         return summary
+
+    def premier_preview(self, values, spec, demo=False):
+        self.prepared = None
+        if not all(spec.get(key) for key in ('ready', 'form', 'fields')) or spec.get('allow_unsaved_fill') is not True:
+            raise ValueError('Configure o formulário novo do Premier e confirme o preenchimento sem gravação.')
+        self.check_values(spec['fields'], values)
+        portal = 'premier'
+        page = self.configuration_page(portal, demo)
+        if not demo:
+            self.preview_pages.add(page)
+        def control(selector):
+            if not demo:
+                self.check_origin(page, portal)
+            return self.control(page, selector)
+
+        with named_step(f'{portal}: tela inicial autenticada'):
+            expect(control(spec['ready'])).to_be_visible(timeout=5000)
+        for index, selector in enumerate(spec.get('open', []), 1):
+            with named_step(f'{portal}: navegação {index}'):
+                step = control(selector)
+                if not step.evaluate(SAFE_NAVIGATION):
+                    raise ValueError(f'{portal}: navegação {index} não é um controle seguro.')
+                step.click()
+        with named_step('Premier: formulário financeiro'):
+            expect(control(spec['form'])).to_be_visible(timeout=5000)
+        form = control(spec['form'])
+        with named_step('Premier: mapeamento do formulário'):
+            if not form.evaluate(
+                '(form, selectors) => selectors.every(selector => form.contains(document.querySelector(selector)))',
+                list(spec['fields'].values()),
+            ):
+                raise ValueError('Premier: recapture os campos dentro do formulário configurado.')
+        self.fill_values(page, spec['fields'], values, date_format=spec.get('input_date_format'), empty_only=not demo)
+        with named_step('Premier: campos obrigatórios'):
+            if not form.evaluate("""element =>
+                [...element.querySelectorAll('input,select,textarea')]
+                .every(field => !field.willValidate || field.validity.valid)"""):
+                raise ValueError('Premier: o formulário tem campos obrigatórios vazios ou inválidos.')
 
     def prepare(self, day, demo, profile_path, progress):
         self.prepared = None
@@ -318,11 +338,26 @@ class Browser:
                 progress(90, 'Formulário fictício preenchido. Aguardando aprovação.')
         return summary
 
-    def fill_preview(self, page, fields, summary, *, date_format=None):
-        values = {field: format_amount(getattr(summary, field)) for field in LABELS}
-        values.update(sale_date=summary.day, receipt_date=summary.day)
+    @staticmethod
+    def summary_values(summary):
+        values = {field: getattr(summary, field) for field in LABELS}
+        return dict(values, sale_date=summary.day, receipt_date=summary.day)
+
+    @staticmethod
+    def check_values(fields, values):
         if not fields or set(fields) - values.keys() or len(set(fields.values())) != len(fields):
-            raise ValueError('Os campos do formulário precisam de um mapeamento sem duplicidades.')
+            raise ValueError('Os campos do formulário precisam de um mapeamento válido e sem duplicidades.')
+        missing = [LABELS.get(key, key) for key in fields if values[key] is None]
+        if missing:
+            raise ValueError('Campos indisponíveis no resumo: ' + ', '.join(missing) + '.')
+
+    def fill_preview(self, page, fields, summary, *, date_format=None):
+        return self.fill_values(page, fields, self.summary_values(summary), date_format=date_format)
+
+    def fill_values(self, page, fields, values, *, date_format=None, empty_only=False):
+        self.check_values(fields, values)
+        values = {key: format_amount(value) if key in LABELS and value is not None else value
+                  for key, value in values.items()}
         selectors, expected = tuple(fields.values()), [values[field] for field in fields]
         for index, (field, selector) in enumerate(fields.items()):
             if page.url != 'about:blank':
@@ -331,10 +366,20 @@ class Browser:
                 control = self.control(page, selector)
                 if not control.evaluate(SAFE_FIELD):
                     raise ValueError(f'Premier: campo inválido para {LABELS.get(field, field)}.')
-                if field in {'sale_date', 'receipt_date'} and date_format == 'br' and control.get_attribute('type') != 'date':
-                    expected[index] = '/'.join(reversed(summary.day.split('-')))
-                control.fill(expected[index])
-                expect(control).to_have_value(expected[index])
+                input_type = control.get_attribute('type')
+                if field.endswith('_date') and date_format == 'br' and input_type != 'date':
+                    expected[index] = '/'.join(reversed(expected[index].split('-')))
+                if field in LABELS and input_type == 'number':
+                    expected[index] = expected[index].replace(',', '.')
+                if empty_only and control.input_value() not in {'', expected[index]}:
+                    raise ValueError(f'Premier: {LABELS.get(field, field)} já tem outro valor. Abra um formulário novo.')
+        for selector, value in zip(selectors, expected, strict=True):
+            with named_step('Premier: preenchimento'):
+                control = self.control(page, selector)
+                if page.url != 'about:blank':
+                    self.check_origin(page, 'premier')
+                if control.input_value() != value:
+                    control.fill(value)
         for field, (selector, value) in zip(fields, zip(selectors, expected), strict=True):
             with named_step(f'Premier: conferência de {LABELS.get(field, field)}'):
                 expect(self.control(page, selector)).to_have_value(value)
