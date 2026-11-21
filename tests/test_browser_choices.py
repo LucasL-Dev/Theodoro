@@ -25,7 +25,7 @@ class BrowserSelectionTests(unittest.TestCase):
 
     def test_missing_channel_reports_selected_browser(self):
         browser = Browser(Event(), choice='msedge')
-        with patch('theodoro.browser.installed_channel', return_value=False):
+        with patch('theodoro.browser.channel_executable', return_value=None):
             with self.assertRaisesRegex(BrowserUnavailable, 'Microsoft Edge não encontrado'):
                 browser.start()
 

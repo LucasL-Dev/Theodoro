@@ -3,7 +3,7 @@ import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
 from threading import Event, Thread
 
 from PySide6.QtCore import QDate, QObject, QStandardPaths, Qt, QTimer, Signal, Slot
@@ -20,6 +20,7 @@ from financeiro.sync import History
 from .assisted import STEPS, save_profile, scope_step, set_step
 from .browser import Browser, BrowserUnavailable, Interrupted
 from .browser_choices import BROWSERS, default_browser
+from .browser_log import configure_log, log_error, logger
 from .daily import LABELS, format_amount
 from .import_tab import ImportTab
 
@@ -58,32 +59,41 @@ class Worker(QObject):
     def serve(self, requests):
         try:
             while True:
-                action, options = requests.get()
+                try:
+                    action, options = requests.get(timeout=0.12 if self.browser.context is not None else None)
+                except Empty:
+                    self.browser.pump()
+                    continue
                 if action == 'close':
                     break
                 self.execute(action, options)
         finally:
-            self.browser.close()
+            self.browser.close(reason='fim_do_aplicativo')
 
     def execute(self, action, options):
+        logger.info('etapa=ação_iniciada ação=%s', action)
         try:
             result = self.run_action(action, options)
         except Interrupted:
             result = {'error': 'Operação interrompida pelo usuário.'}
         except BrowserUnavailable as error:
+            log_error(action, error)
             result = {'error': str(error)}
-        except PlaywrightError:
-            self.browser.close()
-            result = {'error': 'Falha no navegador, na conexão ou no controle da página. Confira o navegador e o perfil.'}
-        except (KeyError, TypeError, OSError):
+        except PlaywrightError as error:
+            log_error(action, error)
+            result = {'error': 'Falha na etapa do navegador. Use Testar navegador e consulte o log de diagnóstico.'}
+        except (KeyError, TypeError, OSError) as error:
+            log_error(action, error)
             result = {'error': 'Configuração, arquivo ou credencial indisponível.'}
         except ValueError as error:
+            log_error(action, error)
             if isinstance(error, json.JSONDecodeError):
                 result = {'error': 'O perfil deve ser um arquivo JSON válido.'}
             else:
                 result = {'error': str(error)}
-        except Exception:
-            result = {'error': 'Erro inesperado ao executar a operação.'}
+        except Exception as error:
+            log_error(action, error)
+            result = {'error': 'Erro inesperado ao executar a operação. Consulte o log de diagnóstico.'}
         if 'error' in result and action in {'start', 'save', 'real_test'}:
             self.summary = None
             self.browser.prepared = None
@@ -91,11 +101,12 @@ class Worker(QObject):
                 self.history.record('desktop_erro', result)
             except Exception:
                 result['error'] += ' O histórico também está indisponível.'
+        logger.info('etapa=ação_retornou ação=%s erro=%s', action, 'error' in result)
         self.done.emit(action, result)
 
     def run_action(self, action, options):
         if action in {'browser_switch', 'browser_close', 'browser_restart'}:
-            self.browser.close()
+            self.browser.close(reason=action)
             self.summary = None
             if action == 'browser_switch':
                 self.browser.choice = options
@@ -104,13 +115,11 @@ class Worker(QObject):
                 return self.browser.premier_session(options)
             return {'message': 'Navegador fechado. O perfil local foi mantido.'}
         if action == 'browser_test':
-            try:
-                version = self.browser.diagnose()
-            except (BrowserUnavailable, PlaywrightError, ValueError) as error:
-                cause = error.__cause__
-                detail = '\n'.join(str(cause or error).splitlines()[:8])
-                return {'error': f'{BROWSERS[self.browser.choice]}: diagnóstico falhou.\n{detail}'}
-            return {'message': f'{BROWSERS[self.browser.choice]} {version}: iniciou e passou em clique, preenchimento e leitura.'}
+            version = self.browser.diagnose(keep_open=True)
+            return {'message': f'{BROWSERS[self.browser.choice]} {version}: clique, preenchimento e leitura confirmados. A aba de teste continua aberta.'}
+        if action == 'browser_verify':
+            self.browser.verify_diagnostic()
+            return {'message': 'A aba continuou funcional após o retorno à interface.'}
         if action == 'credentials':
             vault().set_password('Theodoro.Premier', 'operator', json.dumps(options))
             return {'message': 'Credencial armazenada no Gerenciador de Credenciais do Windows.'}
@@ -628,6 +637,10 @@ def main():
         with closing(sqlite3.connect(old_history)) as source, closing(sqlite3.connect(db_path)) as target:
             source.backup(target)
     data.mkdir(parents=True, exist_ok=True)
+    try:
+        configure_log(data / 'logs')
+    except OSError:
+        QMessageBox.warning(None, 'Diagnóstico', 'Não foi possível criar o arquivo local de log do navegador.')
     window = Window(db_path, session_root=data / 'browser-sessions')
     window.show()
     QTimer.singleShot(0, lambda: window.check_premier_session(startup=True))

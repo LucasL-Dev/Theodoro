@@ -7,7 +7,8 @@ from urllib.parse import urlsplit
 from playwright.sync_api import Error, TimeoutError, expect, sync_playwright
 
 from .assisted import (PICK, SAFE_FIELD, SAFE_NAVIGATION, amount_text, display_value, named_step, store_digest, validate_profile)
-from .browser_choices import BROWSERS, installed_channel
+from .browser_choices import BROWSERS, channel_executable
+from .browser_log import log_error, logger
 from .daily import DailySummary, LABELS, format_amount
 from .session_profile import protected_profile
 
@@ -60,22 +61,30 @@ class Browser:
         self.prepared = None
         self.executable = None
         self.preview_pages = set()
+        self.anchor = None
+        self.diagnostic_page = None
 
     def start(self):
         if self.context is not None and not self.context_closed:
             return
         if self.playwright is not None:
-            self.close()
+            self.close(reason='contexto_interrompido')
 
         if self.choice not in BROWSERS:
             raise ValueError('Navegador selecionado inválido.')
         label = BROWSERS[self.choice]
-        if self.choice != 'chromium' and not installed_channel(self.choice):
-            raise BrowserUnavailable(f'{label} não encontrado nos locais de instalação do canal estável.')
+        logger.info('etapa=resolver_navegador canal=%s persistente=%s visível=%s',
+                    self.choice, self.profile_root is not None, not self.headless)
+        if self.choice != 'chromium':
+            installed = channel_executable(self.choice)
+            if installed is None:
+                raise BrowserUnavailable(f'{label} não encontrado nos locais de instalação do canal estável.')
+            logger.info('etapa=executável_localizado canal=%s arquivo=%s', self.choice, installed.name)
         bundled_root = None
         if self.choice == 'chromium' and getattr(sys, 'frozen', False):
             bundled_root = (Path(sys._MEIPASS) / 'browsers').resolve()
             os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(bundled_root)
+        stage = 'iniciar_playwright'
         try:
             self.playwright = sync_playwright().start()
             chromium = self.playwright.chromium
@@ -89,44 +98,77 @@ class Browser:
             launch_options.update(headless=self.headless, timeout=15000)
             context_options = {'accept_downloads': False, 'service_workers': 'block'}
             if self.profile_root is not None:
+                stage = 'preparar_perfil'
                 profile = protected_profile(self.profile_root, self.choice)
+                stage = 'iniciar_contexto_persistente'
+                logger.info('etapa=%s canal=%s perfil=%s', stage, self.choice, profile.name)
                 self.context = chromium.launch_persistent_context(
                     str(profile), **launch_options, **context_options,
                 )
                 self.process = self.context.browser
-                for startup_page in self.context.pages:
-                    startup_page.close()
             else:
+                stage = 'iniciar_contexto_temporário'
                 self.process = chromium.launch(**launch_options)
                 self.context = self.process.new_context(**context_options)
             self.context_closed = False
             self.context.on('close', self.mark_context_closed)
             self.context.set_default_timeout(5000)
+            stage = 'manter_janela_inicial'
+            startup_pages = list(self.context.pages)
+            self.anchor = next((page for page in startup_pages if page.url == 'about:blank'), None)
+            if self.anchor is None:
+                self.anchor = self.context.new_page()
+            for page in startup_pages:
+                if page != self.anchor:
+                    page.close()
+            if self.process is not None:
+                self.process.on('disconnected', lambda _: logger.info('evento=navegador_desconectado'))
+            logger.info('etapa=contexto_pronto canal=%s', self.choice)
         except Error as error:
-            self.close()
+            log_error(stage, error)
+            self.close(reason='falha_na_inicialização')
             message = f'{label} não conseguiu iniciar. Use Testar navegador para ver os detalhes.'
             if self.profile_root is not None:
                 message += ' Se o perfil estiver em uso, feche a outra janela do Theodoro.'
             raise BrowserUnavailable(message) from error
-        except Exception:
-            self.close()
+        except Exception as error:
+            log_error(stage, error)
+            self.close(reason='falha_na_inicialização')
             raise
+
+    def pump(self):
+        if self.context is None or self.context_closed:
+            return
+        page = next((page for page in self.context.pages if not page.is_closed()), None)
+        if page is not None:
+            try:
+                page.wait_for_timeout(80)
+            except Error as error:
+                log_error('processar_eventos', error)
 
     def mark_context_closed(self, _):
         self.context_closed = True
+        logger.info('evento=contexto_fechado canal=%s', self.choice)
 
-    def diagnose(self):
+    def diagnose(self, *, keep_open=False):
         self.check()
         self.start()
-        page = self.context.new_page()
-        try:
+        page = self.diagnostic_page if keep_open else None
+        if page is None or page.is_closed():
+            page = self.context.new_page()
+            if keep_open:
+                self.diagnostic_page = page
             page.route('**/*', lambda route: route.abort())
             page.set_content("""
+                <title>Diagnóstico local do Theodoro</title>
                 <label>Valor fictício <input></label>
                 <button onclick="document.querySelector('output').textContent =
                                  document.querySelector('input').value">Conferir</button>
                 <output></output>
             """)
+        try:
+            logger.info('etapa=diagnóstico_local canal=%s manter_aberto=%s', self.choice, keep_open)
+            page.bring_to_front()
             field = page.get_by_label('Valor fictício')
             field.fill('42,50')
             page.get_by_role('button', name='Conferir').click()
@@ -134,7 +176,19 @@ class Browser:
                 raise ValueError('O valor lido na página de diagnóstico divergiu do preenchido.')
             return self.process.version if self.process else page.evaluate("navigator.userAgent")
         finally:
-            page.close()
+            if not keep_open:
+                page.close()
+
+    def verify_diagnostic(self):
+        self.check()
+        page = self.diagnostic_page
+        if page is None or page.is_closed() or self.context_closed:
+            raise ValueError('A janela de diagnóstico foi fechada.')
+        if page.title() != 'Diagnóstico local do Theodoro':
+            raise ValueError('A página de diagnóstico já não está aberta.')
+        page.get_by_label('Valor fictício').fill('53,20')
+        page.get_by_role('button', name='Conferir').click()
+        expect(page.locator('output')).to_have_text('53,20')
 
     def check(self):
         if self.stop.is_set():
@@ -150,6 +204,7 @@ class Browser:
         if previous is not None and not previous.is_closed():
             previous.close()
         page = self.context.new_page()
+        logger.info('etapa=abrir_aba portal=%s simulação=%s', portal, demo)
         self.pages[key] = page
         if demo:
             page.route('**/*', lambda route: route.abort())
@@ -170,7 +225,12 @@ class Browser:
 
                 page.route_web_socket('**/*', manage_socket)
                 page.on('close', lambda _: self.preview_pages.discard(page))
-            page.goto(URLS[portal], wait_until='domcontentloaded', timeout=15000)
+            try:
+                logger.info('etapa=navegar portal=%s', portal)
+                page.goto(URLS[portal], wait_until='domcontentloaded', timeout=15000)
+            except Error as error:
+                log_error('navegação_' + portal, error)
+                raise
         return page
 
     def control(self, page, selector):
@@ -316,14 +376,16 @@ class Browser:
             existing.close()
         try:
             page = self.configuration_page('premier', False)
-        except Error:
+        except Error as error:
+            log_error('abrir_premier', error)
             return {'ready': False, 'message': 'O Premier não pôde ser aberto. Confira o navegador e o acesso ao portal.'}
         if not selector:
             return {'ready': False, 'message': 'Faça login manualmente e configure o marcador da tela autenticada do Premier.'}
         try:
             self.check_origin(page, 'premier')
             expect(self.control(page, selector)).to_be_visible(timeout=4000)
-        except (Error, ValueError):
+        except (Error, ValueError) as error:
+            log_error('verificar_sessão_premier', error)
             return {'ready': False, 'message': (
                 'Sessão do Premier não confirmada. Conclua login, CAPTCHA ou MFA manualmente, '
                 'ou confira o marcador autenticado. Se o portal continuar bloqueando o acesso, '
@@ -483,7 +545,11 @@ class Browser:
             raise ValueError('Os valores salvos divergem da prévia.')
         return expected
 
-    def close(self):
+    def close(self, *, reason='solicitado'):
+        if self.playwright:
+            logger.info('etapa=encerrar_navegador motivo=%s canal=%s', reason, self.choice)
+        self.anchor = None
+        self.diagnostic_page = None
         context, self.context = self.context, None
         self.pages.clear()
         self.preview_pages.clear()
@@ -495,9 +561,13 @@ class Browser:
                     context.close()
                 elif self.process and self.process.is_connected():
                     self.process.close()
+            except Error as error:
+                log_error('encerrar_contexto', error)
             finally:
                 self.process = None
                 try:
                     self.playwright.stop()
+                except Error as error:
+                    log_error('encerrar_playwright', error)
                 finally:
                     self.playwright = None

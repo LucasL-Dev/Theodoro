@@ -31,9 +31,9 @@ try {
     $process = Start-Process -FilePath (Join-Path $distribution 'Theodoro.exe') `
         -WorkingDirectory $staging.FullName `
         -ArgumentList '--smoke-test', ('"{0}"' -f $reportPath) -PassThru
-    if (-not $process.WaitForExit(90000)) {
+    if (-not $process.WaitForExit(120000)) {
         $process.Kill($true)
-        throw 'Theodoro.exe não terminou o teste do Chromium em 90 segundos.'
+        throw 'Theodoro.exe não terminou o teste do Chromium em 120 segundos.'
     }
     if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
         throw "Theodoro.exe não produziu o relatório do teste (saída $($process.ExitCode))."
@@ -44,8 +44,14 @@ try {
     if ($process.ExitCode -ne 0 -or $diagnostics.status -ne 'passed') {
         throw 'O diagnóstico de navegadores falhou no pacote final do Theodoro.'
     }
+    if ($env:GITHUB_ACTIONS -eq 'true' -and $diagnostics.chrome_janela_apos_retorno_qt -ne 'passed') {
+        throw 'A validação visual do Google Chrome é obrigatória no GitHub Actions.'
+    }
     if ($env:GITHUB_STEP_SUMMARY) {
         Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value '### Diagnóstico no Theodoro.exe'
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value (
+            "- Chrome visível após retorno ao Qt: $($diagnostics.chrome_janela_apos_retorno_qt)"
+        )
         foreach ($entry in $diagnostics.navegadores.PSObject.Properties) {
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value (
                 "- $($entry.Name): $($entry.Value.status) $($entry.Value.versao) sessão=$($entry.Value.sessao_persistente)".TrimEnd()

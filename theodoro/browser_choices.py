@@ -21,7 +21,7 @@ OTHER_PATHS = {
 }
 
 
-def installed_channel(channel):
+def channel_executable(channel):
     """Check the standard locations resolved by Playwright's stable channels."""
     if sys.platform == 'win32':
         roots = [os.environ.get(name) for name in ('LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)')]
@@ -29,9 +29,13 @@ def installed_channel(channel):
         if drive:
             roots.extend((drive + r'\Program Files', drive + r'\Program Files (x86)'))
         options = (Path(root).joinpath(*WINDOWS_PATHS[channel]) for root in roots if root)
-        return any(path.is_file() for path in options)
+        return next((path for path in options if path.is_file()), None)
     location = OTHER_PATHS.get(sys.platform, {}).get(channel)
-    return bool(location and Path(location).is_file())
+    return Path(location) if location and Path(location).is_file() else None
+
+
+def installed_channel(channel):
+    return channel_executable(channel) is not None
 
 
 def default_browser():

@@ -12,6 +12,7 @@ from openpyxl import Workbook, load_workbook
 
 from .browser import Browser
 from .browser_choices import installed_channel
+from .browser_ui_smoke import verify_worker_browser
 
 
 def check_persistent_session(channel):
@@ -69,6 +70,11 @@ def smoke_test(report_path):
                 result['navegadores'][channel] = {'status': 'indisponível'}
                 continue
             result['navegadores'][channel] = check_persistent_session(channel)
+        if sys.platform == 'win32' and installed_channel('chrome'):
+            verify_worker_browser('chrome', headless=False)
+            result['chrome_janela_apos_retorno_qt'] = 'passed'
+        else:
+            result['chrome_janela_apos_retorno_qt'] = 'indisponível'
     except Exception:
         result = {'status': 'failed', 'diagnostic': format_exc()}
     Path(report_path).write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')

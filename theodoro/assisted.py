@@ -147,8 +147,8 @@ def validate_profile(profile):
 def named_step(label):
     try:
         yield
-    except Error:
-        raise ValueError(f'{label}: controle ausente, ambíguo ou indisponível. Recapture-o em Configurar automação.') from None
+    except Error as error:
+        raise ValueError(f'{label}: controle ausente, ambíguo ou indisponível. Recapture-o em Configurar automação.') from error
 
 
 def amount_text(value):
