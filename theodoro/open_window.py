@@ -1,7 +1,7 @@
 """Windows UI Automation adapter for an explicitly chosen Chrome window."""
 import ctypes
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
 from .browser_choices import channel_executable
@@ -20,6 +20,9 @@ ADDRESS_IDS = {'address and search bar', 'address edit', 'omnibox'}
 
 def approved_address(address, demo):
     try:
+        address = address.strip()
+        if demo and PureWindowsPath(address).is_absolute() and not address.startswith(('//', '\\')):
+            address = PureWindowsPath(address).as_uri()
         parsed = urlsplit(address)
         if demo:
             return (parsed.scheme == 'file' and not parsed.netloc and not parsed.query and not parsed.fragment
@@ -107,12 +110,32 @@ class OpenChrome:
                 addresses.append(control.iface_value.CurrentValue)
             else:
                 waiting.extend(control.children())
-        if len(addresses) != 1 or not approved_address(addresses[0], demo):
-            raise ValueError('A barra de endereço do Chrome não confirmou o destino esperado. Abra a página correta e selecione a janela novamente.')
         if len(documents) != 1:
-            raise ValueError('O Chrome não expôs um documento ativo único à API de acessibilidade.')
+            raise ValueError(f'O Chrome expôs {len(documents)} documentos ativos. Selecione uma janela com apenas a aba de destino visível.')
         document = documents[0]
-        token = (addresses[0], tuple(document.element_info.element.GetRuntimeId()))
+        # Chrome can shorten the accessible address bar text. The root Document's
+        # accessibility value is provided by the browser and may retain its URL.
+        document_address = None
+        from pywinauto.uia_defines import NoPatternInterfaceError
+        from comtypes import COMError
+
+        try:
+            document_address = document.iface_legacy_iaccessible.CurrentValue
+        except (NoPatternInterfaceError, COMError):
+            pass
+        if len(addresses) > 1:
+            raise ValueError('O Chrome expôs mais de uma barra de endereço candidata.')
+        address = addresses[0] if addresses else ''
+        approved = next((item for item in (document_address, address) if item and approved_address(item, demo)), None)
+        if not approved:
+            raise ValueError(
+                'A API de acessibilidade não confirmou o endereço esperado '
+                f'(barra detectada: {bool(addresses)}; URL no documento: {bool(document_address)}). '
+                'Abra a página correta e selecione a janela novamente.'
+            )
+        if address and urlsplit(address).scheme in {'http', 'https', 'file'} and not approved_address(address, demo):
+            raise ValueError('O endereço ativo do Chrome não corresponde ao destino esperado.')
+        token = (approved, tuple(document.element_info.element.GetRuntimeId()))
         return document, token
 
     def fields(self, document):
