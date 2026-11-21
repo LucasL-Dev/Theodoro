@@ -6,7 +6,7 @@ O Theodoro usa PySide6 para a interface, Playwright para operar no Chromium vis�
 
 Na aba **Actions** do GitHub, abra uma execução bem-sucedida de **Executável Windows** e baixe o artefato **Theodoro-Windows**. Extraia o ZIP inteiro e abra **Theodoro.exe** na pasta extraída. O Chromium acompanha o executável em `_internal/browsers/chromium-*/chrome-win/chrome.exe`. Mantenha a pasta completa. A distribuição é portátil e não assinada.
 
-1. Selecione a data, mantenha **Simulação local** marcada e inicie a automação.
+1. Selecione a data, clique em **Iniciar simulação**.
 2. Acompanhe a consulta e o preenchimento no Chromium.
 3. Confira o resumo no aplicativo. Use **Aprovar e salvar teste** para testar a confirmação ou **Parar automação** para interromper. A interrupção é cooperativa e aguarda o retorno da ação atual do navegador.
 4. Consulte **Histórico e erros** para conferir o resultado. A chave de teste por data impede repetir um resultado confirmado ou desconhecido. Para um segundo ensaio bem-sucedido, escolha outra data.
@@ -15,26 +15,29 @@ Os valores usam centavos inteiros. A conciliação compara vendas brutas, taxas 
 
 O histórico fica em `%LOCALAPPDATA%\Theodoro\history.sqlite` no Windows. O aplicativo reaproveita o formato de histórico do commit inicial e, se iniciado da raiz do projeto, importa `data/history.sqlite` na primeira execução. Use `THEODORO_DB` para indicar um caminho específico. A CLI de CSV continua disponível para conferência offline, com `python main.py --help`.
 
-## Diagnóstico e perfil do operador
+## Configurar automação no Windows
 
-Os dois portais retornaram HTTP 403 no proxy do ambiente de desenvolvimento. Os fluxos autenticados, os campos reais e a confirmação do Premier ainda precisam ser verificados com uma conta autorizada. A gravação real está desabilitada no aplicativo.
+Use a aba **Configurar automação** no próprio executável. O login é manual e as sessões ficam no Chromium até fechar o aplicativo. CAPTCHA e MFA são concluídos pelo operador. Os perfis ficam na pasta do histórico, normalmente `%LOCALAPPDATA%\Theodoro`, nos arquivos `automation.json` e `automation-demo.json`. A captura salva seletores estruturais únicos, sem texto da página, valores de campos, URLs da sessão ou credenciais. O estabelecimento fica representado por um resumo criptográfico do rótulo selecionado.
 
-Com Python 3.12 em uma máquina que tenha acesso aos serviços, instale as dependências com `python -m pip install -r requirements.txt` e o navegador com `python -m playwright install chromium`. Abra o aplicativo com `python desktop.py`. Para inspecionar os portais com o seletor visual do Playwright, use:
+1. Selecione o portal e clique em **Abrir portal**. Conclua o login e volte à tela inicial autenticada de onde a operação normal começa.
+2. Selecione **Marcador da tela inicial autenticada** e clique em **Capturar controle**. Clique no elemento no Chromium. Para ensinar um menu, selecione **Adicionar clique de navegação**, capture o botão ou link e depois clique nele novamente no navegador para avançar. A captura em si não executa o clique. Repita na ordem em que serão usados.
+3. Selecione uma etapa existente para testar sua presença na página atual ou substituí-la com **Capturar controle**. **Remover seleção** exclui a etapa selecionada. Se o fluxo parar, a mensagem indica o portal e a etapa a revisar. Alterações são salvas à medida que você configura.
+4. Para ensaiar a configuração com páginas de demonstração, marque **Usar páginas fictícias**, configure os dois portais e clique em **Reproduzir páginas fictícias**. O perfil fictício fica separado do real.
 
-```powershell
-python -m theodoro.diagnose ifood
-python -m theodoro.diagnose premier
-```
+### iFood
 
-O Chromium abre junto com o Inspector. Conclua o login manualmente e use **Pick locator** para identificar controles. Evite capturas de telas com informações financeiras ou credenciais. Mantenha o perfil preenchido fora do repositório. O Inspector usa uma sessão isolada da sessão do aplicativo.
+- Ensine os menus até Financeiro. Selecione a loja no portal e capture o controle que exibe o estabelecimento ativo. Prefira um rótulo que identifique uma única loja. O teste real compara a loja antes e depois da consulta.
+- Capture os filtros de data de vendas e de recebimentos e o botão **Consultar**. Defina o formato para filtros de texto na opção **Data digitada**. Se um filtro governa ambos os períodos, confirme isso no portal antes de associá-lo às duas etapas.
+- Faça uma consulta manual. Capture as duas datas **no resultado da consulta**, não nos filtros. Defina o formato em **Data no resultado**. Capture individualmente os cinco totais exibidos. O leitor aceita valores decimais brasileiros, agrupamento por milhares e o prefixo R$. Valide a convenção dos sinais de taxas e ajustes antes do primeiro teste. O conciliador exige que vendas brutas, taxas e ajustes resultem em vendas líquidas. Repasses efetivamente recebidos ficam separados.
+- Use controles únicos no documento principal. Seletores dos controles de iframes, calendários que exigem uma sequência interativa e formatos financeiros diferentes exigem adaptação após inspeção do portal.
 
-- Copie `examples/profile.template.json`. Os seletores estão vazios até que sejam verificados por um operador autorizado.
-- No iFood, identifique um marcador visível apenas com sessão autenticada (`ready`), a sequência de cliques da área financeira (`open`), os filtros de data, o botão de consulta, as datas retornadas e os cinco totais. O leitor inicial requer inputs que aceitem ISO `AAAA-MM-DD`, datas de resultado no mesmo formato e decimais com vírgula sem agrupamento de milhares. Se o portal usar outros formatos ou controles, adapte o leitor após verificá-los. Verifique a granularidade por loja e se as datas só mudam quando a consulta termina. Use `fee_sign` e `adjustment_sign` com valor -1 quando o portal exibir o sinal inverso ao lançamento contábil.
-- No Premier, identifique o marcador autenticado e a sequência até o formulário. Confirme campos, formato e comportamento ao preencher. Para autorizar apenas a prévia no formulário, ajuste `allow_unsaved_fill` para `true` após verificar que digitar e desfocar não gravam dados. Em `fields`, mapeie somente os campos validados. As chaves aceitas são `sale_date`, `receipt_date`, `gross`, `fees`, `adjustments`, `net` e `payout`. A decisão contábil sobre quais valores devem ser lançados exige validação, especialmente vendas líquidas e repasses.
-- Para login opcional no Premier, adicione `login` ao objeto `premier` com seletores verificados para `email`, `password` e `submit`. Use **Guardar credencial do Premier** para armazenar os dados no Gerenciador de Credenciais do Windows. A senha fica fora do JSON, do histórico e dos logs.
-- Selecione o perfil no aplicativo, clique para conectar aos dois portais e conclua login e verificações adicionais no Chromium. As sessões ficam na memória enquanto o aplicativo estiver aberto. Desmarque a simulação para consultar os portais com o perfil verificado.
+### Premier Delivery
 
-Antes de implementar envios, valide gravação em ambiente de teste com aprovação, referência externa única, busca de duplicidade no Premier e releitura dos valores salvos. Confirme o procedimento de reconciliação quando houver resposta desconhecida. Ainda não foram verificados lançamentos reais, execução agendada ou navegação autenticada nas plataformas.
+- Capture os menus de navegação, o formulário e os campos data/valor que correspondem ao resumo. Capture os campos dentro do formulário, com o rótulo correto. Preencha manualmente quaisquer campos obrigatórios não financeiros que não venham do iFood.
+- Confirme no portal que digitar e sair do campo não grava nenhuma alteração. Só então marque a confirmação na aba de configuração. O teste bloqueia requisições HTTP de alteração e mensagens WebSocket de saída na aba de prévia do Premier. Se o portal depender desse tráfego para carregar a tela, a etapa pode falhar. Feche a aba do Premier para iniciar outra sessão de configuração fora do modo de prévia.
+- Antes de clicar em **Testar integração real**, volte nos dois portais às telas de início usadas ao ensinar o percurso. Deixe o estabelecimento correto selecionado. Escolha a data na aba **Automação**. O aplicativo lê os totais, preenche e confere o formulário e apresenta a prévia. O botão de salvar é exclusivo da simulação original.
+
+O proxy do ambiente de desenvolvimento retornou HTTP 403 para ambos os portais. A configuração assistida foi exercitada com páginas fictícias. Os controles reais devem ser identificados e validados com a conta autorizada no Windows.
 
 ## Compilar e testar
 
