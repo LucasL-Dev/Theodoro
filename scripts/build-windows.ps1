@@ -31,9 +31,9 @@ try {
     $process = Start-Process -FilePath (Join-Path $distribution 'Theodoro.exe') `
         -WorkingDirectory $staging.FullName `
         -ArgumentList '--smoke-test', ('"{0}"' -f $reportPath) -PassThru
-    if (-not $process.WaitForExit(120000)) {
+    if (-not $process.WaitForExit(150000)) {
         $process.Kill($true)
-        throw 'Theodoro.exe não terminou o teste do Chromium em 120 segundos.'
+        throw 'Theodoro.exe não terminou o teste do Chromium em 150 segundos.'
     }
     if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
         throw "Theodoro.exe não produziu o relatório do teste (saída $($process.ExitCode))."
@@ -47,7 +47,13 @@ try {
     if ($env:GITHUB_ACTIONS -eq 'true' -and $diagnostics.chrome_janela_apos_retorno_qt -ne 'passed') {
         throw 'A validação visual do Google Chrome é obrigatória no GitHub Actions.'
     }
+    if ($env:GITHUB_ACTIONS -eq 'true' -and $diagnostics.chrome_janela_externa_uia -ne 'passed') {
+        throw 'A validação do formulário fictício em Chrome externo é obrigatória no GitHub Actions.'
+    }
     if ($env:GITHUB_STEP_SUMMARY) {
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value (
+            "- Formulário local em janela externa do Chrome (UI Automation): $($diagnostics.chrome_janela_externa_uia)"
+        )
         Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value '### Diagnóstico no Theodoro.exe'
         Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value (
             "- Chrome visível após retorno ao Qt: $($diagnostics.chrome_janela_apos_retorno_qt)"

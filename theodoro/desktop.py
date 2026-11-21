@@ -6,7 +6,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Thread
 
-from PySide6.QtCore import QDate, QObject, QStandardPaths, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QDate, QObject, QStandardPaths, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDateEdit, QHBoxLayout, QLabel,
     QInputDialog, QLineEdit, QListWidget, QMainWindow, QMessageBox, QPlainTextEdit,
@@ -23,6 +23,8 @@ from .browser_choices import BROWSERS, default_browser
 from .browser_log import configure_log, log_error, logger
 from .daily import LABELS, format_amount
 from .import_tab import ImportTab
+from .open_window import OpenChrome
+from .open_window_tab import OpenWindowTab
 
 
 def vault():
@@ -55,6 +57,7 @@ class Worker(QObject):
         self.browser = Browser(stop, choice=browser_choice, profile_root=session_root)
         self.history = History(db_path)
         self.summary = None
+        self.open_chrome = OpenChrome(stop)
 
     def serve(self, requests):
         try:
@@ -120,6 +123,25 @@ class Worker(QObject):
         if action == 'browser_verify':
             self.browser.verify_diagnostic()
             return {'message': 'A aba continuou funcional após o retorno à interface.'}
+        if action == 'window_list':
+            return {'windows': self.open_chrome.windows()}
+        if action == 'window_inspect':
+            return {'fields': self.open_chrome.inspect(*options)}
+        if action == 'window_fill':
+            import_id, summary, target, demo, mapping, date_format = options
+            record = {'importacao': import_id, 'estabelecimento': summary['store'],
+                      'dia': summary['day'], 'simulacao': demo, 'premier': 'falha'}
+            try:
+                values = self.open_chrome.fill(target, demo, mapping, summary, date_format)
+            except Exception as error:
+                log_error('preenchimento_janela', error)
+                self.history.record('ifood_premier_janela', record)
+                if isinstance(error, ValueError):
+                    raise
+                raise ValueError('A acessibilidade do Chrome falhou. Confira a janela e o log local.') from error
+            record['premier'] = 'preenchimento_conferido'
+            self.history.record('ifood_premier_janela', record)
+            return {'values': values}
         if action == 'credentials':
             vault().set_password('Theodoro.Premier', 'operator', json.dumps(options))
             return {'message': 'Credencial armazenada no Gerenciador de Credenciais do Windows.'}
@@ -244,6 +266,10 @@ class Window(QMainWindow):
             self.history, self.fill_import, self.check_premier_session, self.refresh_history,
         )
         tabs.addTab(self.import_tab, 'Importar iFood')
+        self.window_tab = OpenWindowTab(
+            self.config_dir / 'open-window.json', self.dispatch, self.stop, self.approved_import,
+        )
+        tabs.addTab(self.window_tab, 'Preenchimento em janela aberta')
         tabs.addTab(operation, 'Automação')
         self.config_tab = QWidget()
         tabs.addTab(self.config_tab, 'Configurar automação')
@@ -312,6 +338,8 @@ class Window(QMainWindow):
         self.history_view.setReadOnly(True)
         history_layout.addWidget(self.history_view)
         self.setup_configuration()
+        self.startup_session_checked = False
+        tabs.currentChanged.connect(lambda _: self.check_managed_tab(tabs.currentWidget() is operation))
         self.refresh_history()
         self.update_controls()
 
@@ -331,6 +359,7 @@ class Window(QMainWindow):
         self.config_no_save.setEnabled(not self.busy and self.config_portal.currentData() == 'premier')
         self.browser_choice.setEnabled(not self.busy)
         self.import_tab.set_busy(self.busy)
+        self.window_tab.set_busy(self.busy, self.busy and self.active_action == 'window_fill')
         self.cancel_button.setEnabled(self.busy or self.pending)
         self.approve.setEnabled(self.pending and not self.busy)
 
@@ -339,6 +368,7 @@ class Window(QMainWindow):
             return
         self.stop.clear()
         self.busy = True
+        self.active_action = action
         self.update_controls()
         self.requests.put((action, options))
 
@@ -518,6 +548,15 @@ class Window(QMainWindow):
         self.persist_config(demo)
         self.refresh_config()
 
+    def approved_import(self):
+        tab = self.import_tab
+        return (tab.run_id, tab.approved) if tab.approved is not None else None
+
+    def check_managed_tab(self, selected):
+        if selected and not self.startup_session_checked and not self.busy:
+            self.startup_session_checked = True
+            self.check_premier_session(startup=True)
+
     def fill_import(self, import_id, summary, demo):
         self.pending = False
         spec = self.profiles[False].get('premier', {})
@@ -561,7 +600,9 @@ class Window(QMainWindow):
     @Slot(str, object)
     def completed(self, action, result):
         self.busy = False
-        if action in {'import_connect', 'startup_session', 'browser_restart'}:
+        if action.startswith('window_'):
+            self.window_tab.complete(action, result)
+        elif action in {'import_connect', 'startup_session', 'browser_restart'}:
             status = result.get('error') or result['message']
             self.import_tab.status.setText(status)
             self.message.setText(status)
@@ -643,5 +684,4 @@ def main():
         QMessageBox.warning(None, 'Diagnóstico', 'Não foi possível criar o arquivo local de log do navegador.')
     window = Window(db_path, session_root=data / 'browser-sessions')
     window.show()
-    QTimer.singleShot(0, lambda: window.check_premier_session(startup=True))
     return app.exec()
