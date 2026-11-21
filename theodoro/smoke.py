@@ -3,13 +3,39 @@ import json
 import sys
 from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Event
+from time import time
 from traceback import format_exc
 
 from openpyxl import Workbook, load_workbook
 
 from .browser import Browser
 from .browser_choices import installed_channel
+
+
+def check_persistent_session(channel):
+    # Use only disposable application-owned profiles and a synthetic cookie.
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary) / 'sessions'
+        browser = Browser(Event(), headless=True, choice=channel, profile_root=root)
+        try:
+            version = browser.diagnose()
+            browser.context.add_cookies([{
+                'name': 'theodoro_test', 'value': 'session', 'url': 'https://example.test/',
+                'expires': int(time()) + 300,
+            }])
+        finally:
+            browser.close()
+        restarted = Browser(Event(), headless=True, choice=channel, profile_root=root)
+        try:
+            restarted.start()
+            if not any(cookie['name'] == 'theodoro_test' and cookie['value'] == 'session'
+                       for cookie in restarted.context.cookies('https://example.test/')):
+                raise RuntimeError(f'A sessão fictícia de {channel} não persistiu.')
+        finally:
+            restarted.close()
+    return {'status': 'passed', 'versao': version, 'sessao_persistente': 'passed'}
 
 
 def smoke_test(report_path):
@@ -38,15 +64,11 @@ def smoke_test(report_path):
                       'navegadores': {'chromium': {'status': 'passed', 'versao': version}}}
         finally:
             browser.close()
-        for channel in ('chrome', 'msedge'):
-            if not installed_channel(channel):
+        for channel in ('chromium', 'chrome', 'msedge'):
+            if channel != 'chromium' and not installed_channel(channel):
                 result['navegadores'][channel] = {'status': 'indisponível'}
                 continue
-            candidate = Browser(Event(), headless=True, choice=channel)
-            try:
-                result['navegadores'][channel] = {'status': 'passed', 'versao': candidate.diagnose()}
-            finally:
-                candidate.close()
+            result['navegadores'][channel] = check_persistent_session(channel)
     except Exception:
         result = {'status': 'failed', 'diagnostic': format_exc()}
     Path(report_path).write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')

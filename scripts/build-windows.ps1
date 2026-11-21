@@ -31,9 +31,9 @@ try {
     $process = Start-Process -FilePath (Join-Path $distribution 'Theodoro.exe') `
         -WorkingDirectory $staging.FullName `
         -ArgumentList '--smoke-test', ('"{0}"' -f $reportPath) -PassThru
-    if (-not $process.WaitForExit(60000)) {
+    if (-not $process.WaitForExit(90000)) {
         $process.Kill($true)
-        throw 'Theodoro.exe não terminou o teste do Chromium em 60 segundos.'
+        throw 'Theodoro.exe não terminou o teste do Chromium em 90 segundos.'
     }
     if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
         throw "Theodoro.exe não produziu o relatório do teste (saída $($process.ExitCode))."
@@ -48,7 +48,7 @@ try {
         Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value '### Diagnóstico no Theodoro.exe'
         foreach ($entry in $diagnostics.navegadores.PSObject.Properties) {
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value (
-                "- $($entry.Name): $($entry.Value.status) $($entry.Value.versao)".TrimEnd()
+                "- $($entry.Name): $($entry.Value.status) $($entry.Value.versao) sessão=$($entry.Value.sessao_persistente)".TrimEnd()
             )
         }
     }

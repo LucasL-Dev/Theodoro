@@ -6,7 +6,7 @@ from pathlib import Path
 from queue import Queue
 from threading import Event, Thread
 
-from PySide6.QtCore import QDate, QObject, QStandardPaths, Qt, Signal, Slot
+from PySide6.QtCore import QDate, QObject, QStandardPaths, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDateEdit, QHBoxLayout, QLabel,
     QInputDialog, QLineEdit, QListWidget, QMainWindow, QMessageBox, QPlainTextEdit,
@@ -49,9 +49,9 @@ class Worker(QObject):
     progress = Signal(int, str)
     done = Signal(str, object)
 
-    def __init__(self, stop, db_path, browser_choice):
+    def __init__(self, stop, db_path, browser_choice, session_root=None):
         super().__init__()
-        self.browser = Browser(stop, choice=browser_choice)
+        self.browser = Browser(stop, choice=browser_choice, profile_root=session_root)
         self.history = History(db_path)
         self.summary = None
 
@@ -101,10 +101,8 @@ class Worker(QObject):
                 self.browser.choice = options
                 return {'message': f'{BROWSERS[options]} selecionado. Faça login ao abrir um portal.'}
             if action == 'browser_restart':
-                self.browser.start()
-                self.browser.context.new_page()
-                return {'message': 'Nova sessão isolada iniciada. Faça login novamente nos portais.'}
-            return {'message': 'Sessão fechada.'}
+                return self.browser.premier_session(options)
+            return {'message': 'Navegador fechado. O perfil local foi mantido.'}
         if action == 'browser_test':
             try:
                 version = self.browser.diagnose()
@@ -141,9 +139,8 @@ class Worker(QObject):
         if action == 'config_check':
             self.browser.test_selector(*options)
             return {'message': 'Controle único e visível na página atual.'}
-        if action == 'import_connect':
-            self.browser.configuration_page('premier', False)
-            return {'message': 'Conclua o login manualmente no Chromium e volte à tela inicial autenticada.'}
+        if action in {'import_connect', 'startup_session'}:
+            return self.browser.premier_session(options, manual=action == 'import_connect')
         if action == 'import_fill':
             import_id, summary, spec, demo = options
             self.summary = None
@@ -200,7 +197,7 @@ class Worker(QObject):
 
 
 class Window(QMainWindow):
-    def __init__(self, path):
+    def __init__(self, path, session_root=None):
         super().__init__()
         self.setWindowTitle('Theodoro | Automação financeira')
         self.resize(780, 565)
@@ -225,7 +222,7 @@ class Window(QMainWindow):
                 self.profiles[demo] = {}
         self.capture_target = None
         self.requests = Queue()
-        self.worker = Worker(self.stop, path, browser_choice)
+        self.worker = Worker(self.stop, path, browser_choice, session_root)
         self.worker.progress.connect(self.update_progress, Qt.ConnectionType.QueuedConnection)
         self.worker.done.connect(self.completed, Qt.ConnectionType.QueuedConnection)
         self.thread = Thread(target=self.worker.serve, args=(self.requests,), name='TheodoroBrowser')
@@ -235,7 +232,7 @@ class Window(QMainWindow):
         self.setCentralWidget(tabs)
         operation, history = QWidget(), QWidget()
         self.import_tab = ImportTab(
-            self.history, self.fill_import, lambda: self.dispatch('import_connect', None), self.refresh_history,
+            self.history, self.fill_import, self.check_premier_session, self.refresh_history,
         )
         tabs.addTab(self.import_tab, 'Importar iFood')
         tabs.addTab(operation, 'Automação')
@@ -282,7 +279,7 @@ class Window(QMainWindow):
         browser_row.addWidget(self.browser_choice)
         self.add_button(browser_row, 'Testar navegador', lambda: self.dispatch('browser_test', None))
         self.add_button(browser_row, 'Fechar sessão', lambda: self.reset_browser('browser_close'))
-        self.add_button(browser_row, 'Reiniciar sessão', lambda: self.reset_browser('browser_restart'))
+        self.add_button(browser_row, 'Reiniciar sessão', lambda: self.reset_browser('browser_restart', self.premier_marker()))
         actions = QHBoxLayout()
         layout.addLayout(actions)
         self.add_button(actions, 'Iniciar simulação', self.start)
@@ -353,6 +350,16 @@ class Window(QMainWindow):
         for label in self.connection_labels.values():
             label.setText('Sessão a verificar')
         self.dispatch(action, choice)
+
+    def premier_marker(self):
+        return self.profiles[False].get('premier', {}).get('ready')
+
+    def check_premier_session(self, startup=False):
+        if startup and not self.premier_marker():
+            self.message.setText('Configure o marcador autenticado do Premier para verificar a sessão ao iniciar.')
+            return
+        action = 'startup_session' if startup else 'import_connect'
+        self.dispatch(action, self.premier_marker())
 
     def start(self):
         self.pending = False
@@ -545,7 +552,14 @@ class Window(QMainWindow):
     @Slot(str, object)
     def completed(self, action, result):
         self.busy = False
-        if action in {'import_fill', 'import_connect'}:
+        if action in {'import_connect', 'startup_session', 'browser_restart'}:
+            status = result.get('error') or result['message']
+            self.import_tab.status.setText(status)
+            self.message.setText(status)
+            self.connection_labels['premier'].setText(
+                'Conectado' if result.get('ready') else 'Sessão a verificar',
+            )
+        elif action == 'import_fill':
             self.import_tab.status.setText(result.get('error') or result['message'])
         elif 'error' in result:
             if action.startswith('config_') or action == 'real_test':
@@ -613,6 +627,8 @@ def main():
         db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(old_history)) as source, closing(sqlite3.connect(db_path)) as target:
             source.backup(target)
-    window = Window(db_path)
+    data.mkdir(parents=True, exist_ok=True)
+    window = Window(db_path, session_root=data / 'browser-sessions')
     window.show()
+    QTimer.singleShot(0, lambda: window.check_premier_session(startup=True))
     return app.exec()

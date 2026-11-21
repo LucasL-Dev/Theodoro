@@ -9,6 +9,7 @@ from playwright.sync_api import Error, TimeoutError, expect, sync_playwright
 from .assisted import (PICK, SAFE_FIELD, SAFE_NAVIGATION, amount_text, display_value, named_step, store_digest, validate_profile)
 from .browser_choices import BROWSERS, installed_channel
 from .daily import DailySummary, LABELS, format_amount
+from .session_profile import protected_profile
 
 ASSETS = Path(__file__).with_name('assets')
 URLS = {
@@ -46,10 +47,12 @@ def chromium_executable(default, bundled_root, override):
 
 
 class Browser:
-    def __init__(self, stop, *, headless=False, choice='chromium'):
+    def __init__(self, stop, *, headless=False, choice='chromium', profile_root=None):
         self.stop = stop
         self.headless = headless
         self.choice = choice
+        self.profile_root = profile_root
+        self.context_closed = False
         self.process = None
         self.playwright = None
         self.context = None
@@ -59,7 +62,7 @@ class Browser:
         self.preview_pages = set()
 
     def start(self):
-        if self.context is not None and self.process.is_connected():
+        if self.context is not None and not self.context_closed:
             return
         if self.playwright is not None:
             self.close()
@@ -83,17 +86,34 @@ class Browser:
                 launch_options = {'executable_path': str(self.executable)}
             else:
                 launch_options = {'channel': self.choice}
-            self.process = chromium.launch(headless=self.headless, timeout=15000, **launch_options)
-            self.context = self.process.new_context(accept_downloads=False, service_workers='block')
+            launch_options.update(headless=self.headless, timeout=15000)
+            context_options = {'accept_downloads': False, 'service_workers': 'block'}
+            if self.profile_root is not None:
+                profile = protected_profile(self.profile_root, self.choice)
+                self.context = chromium.launch_persistent_context(
+                    str(profile), **launch_options, **context_options,
+                )
+                self.process = self.context.browser
+                for startup_page in self.context.pages:
+                    startup_page.close()
+            else:
+                self.process = chromium.launch(**launch_options)
+                self.context = self.process.new_context(**context_options)
+            self.context_closed = False
+            self.context.on('close', self.mark_context_closed)
             self.context.set_default_timeout(5000)
         except Error as error:
             self.close()
-            raise BrowserUnavailable(
-                f'{label} não conseguiu iniciar. Use Testar navegador para ver os detalhes.'
-            ) from error
+            message = f'{label} não conseguiu iniciar. Use Testar navegador para ver os detalhes.'
+            if self.profile_root is not None:
+                message += ' Se o perfil estiver em uso, feche a outra janela do Theodoro.'
+            raise BrowserUnavailable(message) from error
         except Exception:
             self.close()
             raise
+
+    def mark_context_closed(self, _):
+        self.context_closed = True
 
     def diagnose(self):
         self.check()
@@ -112,7 +132,7 @@ class Browser:
             page.get_by_role('button', name='Conferir').click()
             if field.input_value() != '42,50' or page.locator('output').inner_text() != '42,50':
                 raise ValueError('O valor lido na página de diagnóstico divergiu do preenchido.')
-            return self.process.version
+            return self.process.version if self.process else page.evaluate("navigator.userAgent")
         finally:
             page.close()
 
@@ -290,12 +310,37 @@ class Browser:
         progress(100, 'Prévia conferida. Nenhum lançamento foi salvo.')
         return summary
 
+    def premier_session(self, selector, *, manual=False):
+        existing = self.pages.get(('premier', False))
+        if manual and existing in self.preview_pages and not existing.is_closed():
+            existing.close()
+        try:
+            page = self.configuration_page('premier', False)
+        except Error:
+            return {'ready': False, 'message': 'O Premier não pôde ser aberto. Confira o navegador e o acesso ao portal.'}
+        if not selector:
+            return {'ready': False, 'message': 'Faça login manualmente e configure o marcador da tela autenticada do Premier.'}
+        try:
+            self.check_origin(page, 'premier')
+            expect(self.control(page, selector)).to_be_visible(timeout=4000)
+        except (Error, ValueError):
+            return {'ready': False, 'message': (
+                'Sessão do Premier não confirmada. Conclua login, CAPTCHA ou MFA manualmente, '
+                'ou confira o marcador autenticado. Se o portal continuar bloqueando o acesso, '
+                'o preenchimento ficará indisponível.'
+            )}
+        return {'ready': True, 'message': 'Sessão do Premier confirmada. O preenchimento sem gravação está disponível.'}
+
     def premier_preview(self, values, spec, demo=False):
         self.prepared = None
         if not all(spec.get(key) for key in ('ready', 'form', 'fields')) or spec.get('allow_unsaved_fill') is not True:
             raise ValueError('Configure o formulário novo do Premier e confirme o preenchimento sem gravação.')
         self.check_values(spec['fields'], values)
         portal = 'premier'
+        if not demo:
+            status = self.premier_session(spec['ready'])
+            if not status['ready']:
+                raise ValueError(status['message'])
         page = self.configuration_page(portal, demo)
         if not demo:
             self.preview_pages.add(page)
@@ -439,14 +484,16 @@ class Browser:
         return expected
 
     def close(self):
-        self.context = None
+        context, self.context = self.context, None
         self.pages.clear()
         self.preview_pages.clear()
         self.prepared = None
         self.executable = None
         if self.playwright:
             try:
-                if self.process and self.process.is_connected():
+                if self.profile_root is not None and context is not None and not self.context_closed:
+                    context.close()
+                elif self.process and self.process.is_connected():
                     self.process.close()
             finally:
                 self.process = None
