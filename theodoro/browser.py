@@ -1,9 +1,10 @@
 import json
 import os
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Error, sync_playwright
 
 from .daily import DailySummary, LABELS, format_amount
 
@@ -18,6 +19,26 @@ class Interrupted(Exception):
     pass
 
 
+class ChromiumUnavailable(Exception):
+    pass
+
+
+def chromium_executable(default, bundled_root, override):
+    path = Path(default if bundled_root or not override else override).resolve()
+    if bundled_root:
+        if not path.is_relative_to(bundled_root) or not path.is_file():
+            raise ChromiumUnavailable(
+                'Chromium não encontrado na distribuição. Extraia o ZIP completo e mantenha '
+                'a pasta _internal/browsers na distribuição.'
+            )
+    elif not path.is_file():
+        raise ChromiumUnavailable(
+            'Executável do Chromium não encontrado. Confira THEODORO_CHROMIUM '
+            'ou instale o Chromium do Playwright no ambiente de desenvolvimento.'
+        )
+    return path
+
+
 class Browser:
     def __init__(self, stop, *, headless=False):
         self.stop = stop
@@ -26,20 +47,37 @@ class Browser:
         self.context = None
         self.pages = {}
         self.prepared = None
+        self.executable = None
 
     def start(self):
-        if self.context is None:
+        if self.context is not None:
+            return
+
+        bundled_root = None
+        if getattr(sys, 'frozen', False):
+            bundled_root = (Path(sys._MEIPASS) / 'browsers').resolve()
+            os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(bundled_root)
+        try:
             self.playwright = sync_playwright().start()
-            try:
-                browser = self.playwright.chromium.launch(
-                    headless=self.headless,
-                    executable_path=os.environ.get('THEODORO_CHROMIUM'),
-                )
-                self.context = browser.new_context(accept_downloads=False)
-                self.context.set_default_timeout(5000)
-            except Exception:
-                self.close()
-                raise
+            chromium = self.playwright.chromium
+            self.executable = chromium_executable(
+                chromium.executable_path, bundled_root, os.environ.get('THEODORO_CHROMIUM'),
+            )
+            # Pass the full browser explicitly so even headless checks use the shipped executable.
+            browser = chromium.launch(
+                headless=self.headless, executable_path=str(self.executable), timeout=15000,
+            )
+            self.context = browser.new_context(accept_downloads=False)
+            self.context.set_default_timeout(5000)
+        except Error as error:
+            self.close()
+            raise ChromiumUnavailable(
+                'O Chromium não conseguiu iniciar. Confira se o pacote foi extraído por completo '
+                'e se o Windows permite executar os arquivos da distribuição.'
+            ) from error
+        except Exception:
+            self.close()
+            raise
 
     def check(self):
         if self.stop.is_set():

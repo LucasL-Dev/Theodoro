@@ -1,11 +1,14 @@
 import sys
-import os
 
-# PyInstaller bundles Chromium into Playwright's package-local browser directory.
-if getattr(sys, 'frozen', False):
-    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '0'
 
-from theodoro.desktop import main
+def run():
+    if len(sys.argv) == 3 and sys.argv[1] == '--smoke-test':
+        from theodoro.smoke import smoke_test
+        return smoke_test(sys.argv[2])
+
+    from theodoro.desktop import main
+    return main()
+
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    raise SystemExit(run())

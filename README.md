@@ -4,7 +4,7 @@ O Theodoro usa PySide6 para a interface, Playwright para operar no Chromium vis�
 
 ## Abrir no Windows
 
-Na aba **Actions** do GitHub, abra uma execução bem-sucedida de **Executável Windows** e baixe o artefato **Theodoro-Windows**. Extraia o ZIP inteiro e abra **Theodoro.exe** na pasta extraída. O Chromium e as bibliotecas acompanham o executável. Mantenha a pasta completa. A distribuição é portátil e não assinada.
+Na aba **Actions** do GitHub, abra uma execução bem-sucedida de **Executável Windows** e baixe o artefato **Theodoro-Windows**. Extraia o ZIP inteiro e abra **Theodoro.exe** na pasta extraída. O Chromium acompanha o executável em `_internal/browsers/chromium-*/chrome-win/chrome.exe`. Mantenha a pasta completa. A distribuição é portátil e não assinada.
 
 1. Selecione a data, mantenha **Simulação local** marcada e inicie a automação.
 2. Acompanhe a consulta e o preenchimento no Chromium.
@@ -38,4 +38,4 @@ Antes de implementar envios, valide gravação em ambiente de teste com aprovaç
 
 ## Compilar e testar
 
-Em Windows com PowerShell 7 e Python 3.12, execute `pwsh -File scripts/build-windows.ps1`. A compilação gera `dist/Theodoro/Theodoro.exe` e seus arquivos de suporte. O GitHub Actions executa o mesmo script e empacota a pasta. Os testes com navegador podem ser executados separadamente após instalar o Chromium, definindo `THEODORO_BROWSER_TEST=1` e rodando `python -m unittest discover -s tests -v`. Em desenvolvimento, `THEODORO_CHROMIUM` pode apontar para um Chromium já instalado.
+Em Windows com PowerShell 7 e Python 3.12, execute `pwsh -File scripts/build-windows.ps1`. A compilação gera `dist/Theodoro/Theodoro.exe` e seus arquivos de suporte. O GitHub Actions executa o mesmo script, que baixa o Chromium, copia os binários para `dist/Theodoro/_internal/browsers` e testa o próprio `Theodoro.exe` em modo headless com a página local de demonstração. O artefato só é publicado após esse teste passar. Os testes com navegador podem ser executados separadamente após instalar o Chromium, definindo `THEODORO_BROWSER_TEST=1` e rodando `python -m unittest discover -s tests -v`. Em desenvolvimento, `THEODORO_CHROMIUM` pode apontar para um Chromium já instalado.

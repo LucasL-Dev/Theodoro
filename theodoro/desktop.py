@@ -17,7 +17,7 @@ from playwright.sync_api import Error as PlaywrightError
 from financeiro.mapping import Entry
 from financeiro.sync import History
 
-from .browser import Browser, Interrupted
+from .browser import Browser, ChromiumUnavailable, Interrupted
 from .daily import LABELS, format_amount
 
 
@@ -67,6 +67,8 @@ class Worker(QObject):
             result = self.run_action(action, options)
         except Interrupted:
             result = {'error': 'Operação interrompida pelo usuário.'}
+        except ChromiumUnavailable as error:
+            result = {'error': str(error)}
         except PlaywrightError:
             self.browser.close()
             result = {'error': 'Falha no Chromium, na conexão ou no controle da página. Confira o navegador e o perfil.'}
