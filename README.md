@@ -1,38 +1,41 @@
-# Automação financeira iFood → Premier Delivery
+# Theodoro para Windows
 
-O fluxo local importa CSV, valida e classifica movimentações, gera uma prévia e registra cada simulação em SQLite. A interface e a CLI executam apenas simulações.
+O Theodoro usa PySide6 para a interface, Playwright para operar no Chromium visível e SQLite para o histórico. Na simulação local, o navegador consulta uma tela financeira fictícia, confere as datas, lê os totais, abre outro formulário, preenche os campos e só aciona **Salvar teste** após confirmação no aplicativo. A leitura do recibo confere os valores antes de marcar o lançamento fictício como confirmado.
 
-## Diagnóstico técnico
+## Abrir no Windows
 
-Na investigação inicial, o proxy retornou HTTP 403 ao estabelecer o túnel para `inside.premierdelivery.com.br`, `developer.ifood.com.br` e `portal.ifood.com.br`. A requisição não chegou aos portais. Os fluxos autenticados e a disponibilidade de uma API financeira ou de um relatório exportável para esta conta continuam por verificar. O CSV e as categorias em `examples/` são fictícios.
+Na aba **Actions** do GitHub, abra uma execução bem-sucedida de **Executável Windows** e baixe o artefato **Theodoro-Windows**. Extraia o ZIP inteiro e abra **Theodoro.exe** na pasta extraída. O Chromium e as bibliotecas acompanham o executável. Mantenha a pasta completa. A distribuição é portátil e não assinada.
 
-Quando houver acesso autorizado:
+1. Selecione a data, mantenha **Simulação local** marcada e inicie a automação.
+2. Acompanhe a consulta e o preenchimento no Chromium.
+3. Confira o resumo no aplicativo. Use **Aprovar e salvar teste** para testar a confirmação ou **Parar automação** para interromper. A interrupção é cooperativa e aguarda o retorno da ação atual do navegador.
+4. Consulte **Histórico e erros** para conferir o resultado. A chave de teste por data impede repetir um resultado confirmado ou desconhecido. Para um segundo ensaio bem-sucedido, escolha outra data.
 
-1. Consultar a documentação oficial do iFood e verificar quais relatórios ou recursos financeiros a conta pode acessar. Preferir a integração oficial ou exportação disponível. Registrar filtros, campos, identificadores, granularidade, moeda e formatos com uma amostra autorizada.
-2. Entrar no Premier Delivery e verificar a navegação até Financeiro, os campos obrigatórios, as datas, o tratamento de sinais, as categorias, a referência externa e a confirmação de salvamento. Se o portal solicitar MFA ou CAPTCHA, concluir a etapa manualmente.
-3. Conferir com a pessoa responsável quais linhas representam vendas, encargos e dinheiro recebido. Verificar se o identificador da origem é estável por loja e tipo antes de aplicar o mapeamento real. Validar a prevenção de duplicidade contra o histórico do próprio portal, incluindo lançamentos manuais.
-4. Aprovar um lote em ambiente de teste, registrar os lançamentos e conferir os campos persistidos. Em caso de falha após iniciar uma gravação, reconciliar o resultado antes de qualquer nova tentativa. Habilitar produção ou agendamento somente após essa validação.
+Os valores usam centavos inteiros. A conciliação compara vendas brutas, taxas e ajustes com vendas líquidas. Repasses consultados pelo dia do recebimento ficam separados e não são somados ao saldo das vendas. O perfil precisa identificar de forma inequívoca o dia de cada total. A demonstração usa a mesma data de calendário para os dois filtros.
 
-## Executar localmente
+O histórico fica em `%LOCALAPPDATA%\Theodoro\history.sqlite` no Windows. O aplicativo reaproveita o formato de histórico do commit inicial e, se iniciado da raiz do projeto, importa `data/history.sqlite` na primeira execução. Use `THEODORO_DB` para indicar um caminho específico. A CLI de CSV continua disponível para conferência offline, com `python main.py --help`.
 
-Requer Python 3.12 ou superior. A CLI e os testes usam a biblioteca padrão.
+## Diagnóstico e perfil do operador
 
-```sh
-python main.py --report examples/report.csv --mapping examples/mapping.json \
-  --start 2026-11-01 --end 2026-11-30
-python -m unittest discover -s tests -v
+Os dois portais retornaram HTTP 403 no proxy do ambiente de desenvolvimento. Os fluxos autenticados, os campos reais e a confirmação do Premier ainda precisam ser verificados com uma conta autorizada. A gravação real está desabilitada no aplicativo.
+
+Com Python 3.12 em uma máquina que tenha acesso aos serviços, instale as dependências com `python -m pip install -r requirements.txt` e o navegador com `python -m playwright install chromium`. Abra o aplicativo com `python desktop.py`. Para inspecionar os portais com o seletor visual do Playwright, use:
+
+```powershell
+python -m theodoro.diagnose ifood
+python -m theodoro.diagnose premier
 ```
 
-Para abrir o painel:
+O Chromium abre junto com o Inspector. Conclua o login manualmente e use **Pick locator** para identificar controles. Evite capturas de telas com informações financeiras ou credenciais. Mantenha o perfil preenchido fora do repositório. O Inspector usa uma sessão isolada da sessão do aplicativo.
 
-```sh
-python -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m streamlit run dashboard/app.py --server.address 127.0.0.1
-```
+- Copie `examples/profile.template.json`. Os seletores estão vazios até que sejam verificados por um operador autorizado.
+- No iFood, identifique um marcador visível apenas com sessão autenticada (`ready`), a sequência de cliques da área financeira (`open`), os filtros de data, o botão de consulta, as datas retornadas e os cinco totais. O leitor inicial requer inputs que aceitem ISO `AAAA-MM-DD`, datas de resultado no mesmo formato e decimais com vírgula sem agrupamento de milhares. Se o portal usar outros formatos ou controles, adapte o leitor após verificá-los. Verifique a granularidade por loja e se as datas só mudam quando a consulta termina. Use `fee_sign` e `adjustment_sign` com valor -1 quando o portal exibir o sinal inverso ao lançamento contábil.
+- No Premier, identifique o marcador autenticado e a sequência até o formulário. Confirme campos, formato e comportamento ao preencher. Para autorizar apenas a prévia no formulário, ajuste `allow_unsaved_fill` para `true` após verificar que digitar e desfocar não gravam dados. Em `fields`, mapeie somente os campos validados. As chaves aceitas são `sale_date`, `receipt_date`, `gross`, `fees`, `adjustments`, `net` e `payout`. A decisão contábil sobre quais valores devem ser lançados exige validação, especialmente vendas líquidas e repasses.
+- Para login opcional no Premier, adicione `login` ao objeto `premier` com seletores verificados para `email`, `password` e `submit`. Use **Guardar credencial do Premier** para armazenar os dados no Gerenciador de Credenciais do Windows. A senha fica fora do JSON, do histórico e dos logs.
+- Selecione o perfil no aplicativo, clique para conectar aos dois portais e conclua login e verificações adicionais no Chromium. As sessões ficam na memória enquanto o aplicativo estiver aberto. Desmarque a simulação para consultar os portais com o perfil verificado.
 
-Selecione novembro de 2026 no painel, marque **Usar dados fictícios do exemplo** e execute a simulação. Para um CSV local, carregue também o JSON que mapeia os seus cabeçalhos e categorias. O filtro usa a data de competência configurada como `reference_date`. A data da venda e a data do repasse são preservadas separadamente. Os valores são inteiros em centavos. Os relatórios apresentam as movimentações individualmente para evitar somar vendas e repasses como se fossem receitas distintas. Na CLI, o código de saída é 0 para simulações sem erros ou registros em revisão, 1 quando há linhas inválidas ou pendências e 2 quando a entrada não pode ser processada.
+Antes de implementar envios, valide gravação em ambiente de teste com aprovação, referência externa única, busca de duplicidade no Premier e releitura dos valores salvos. Confirme o procedimento de reconciliação quando houver resposta desconhecida. Ainda não foram verificados lançamentos reais, execução agendada ou navegação autenticada nas plataformas.
 
-O histórico fica em `data/history.sqlite` e guarda a prévia financeira. Restrinja o acesso ao arquivo e aos relatórios de origem. Use `.env.example` como referência para as futuras integrações autenticadas. A simulação não usa credenciais.
+## Compilar e testar
 
-O envio e a releitura do lançamento foram exercitados com um destino fictício isolado pelos testes. A chave local combina loja, identificador e tipo de movimentação. Um resultado desconhecido bloqueia novas tentativas com a mesma chave e vai para revisão. A coleta autenticada, a conferência no Premier, os envios reais e a rotina diária dependem das verificações acima.
+Em Windows com PowerShell 7 e Python 3.12, execute `pwsh -File scripts/build-windows.ps1`. A compilação gera `dist/Theodoro/Theodoro.exe` e seus arquivos de suporte. O GitHub Actions executa o mesmo script e empacota a pasta. Os testes com navegador podem ser executados separadamente após instalar o Chromium, definindo `THEODORO_BROWSER_TEST=1` e rodando `python -m unittest discover -s tests -v`. Em desenvolvimento, `THEODORO_CHROMIUM` pode apontar para um Chromium já instalado.

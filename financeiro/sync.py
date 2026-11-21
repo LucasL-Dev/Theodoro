@@ -69,9 +69,9 @@ class History:
 
     def runs(self):
         with closing(self.open()) as db:
-            rows = db.execute('SELECT id, created_at, report FROM runs ORDER BY id DESC LIMIT 100')
-            return [dict(json.loads(report), run_id=key, utc=created_at)
-                    for key, created_at, report in rows]
+            rows = db.execute('SELECT id, created_at, mode, report FROM runs ORDER BY id DESC LIMIT 100')
+            return [dict(json.loads(report), run_id=key, utc=created_at, mode=mode)
+                    for key, created_at, mode, report in rows]
 
     def send_to_test_destination(self, entry, destination, *, approved_payload):
         """Exercise creation and read-back against a test double."""
@@ -102,3 +102,11 @@ class History:
             db.execute('UPDATE ledger SET status = ?, receipt = ? WHERE key = ?',
                        (status, receipt, key))
         return status
+
+    def record(self, mode, report):
+        with closing(self.open()) as db, db:
+            run = db.execute(
+                'INSERT INTO runs (mode, report) VALUES (?, ?)',
+                (mode, json.dumps(report, ensure_ascii=False)),
+            )
+            return run.lastrowid

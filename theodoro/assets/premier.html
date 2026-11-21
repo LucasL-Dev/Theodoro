@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="pt-BR"><meta charset="utf-8"><title>Premier fictício</title>
+<h1>Premier fictício</h1>
+<button id="finance" onclick="document.querySelector('form').hidden=false">Financeiro</button>
+<form hidden>
+<label>Data da venda <input id="sale-date" type="date"></label>
+<label>Data do recebimento <input id="receipt-date" type="date"></label>
+<label>Vendas líquidas <input id="net" required></label>
+<label>Repasses recebidos <input id="payout" required></label>
+<button id="save" disabled>Salvar teste</button>
+</form>
+<section id="saved" hidden><h2>Lançamento fictício salvo</h2><output id="receipt"></output></section>
+<script>
+document.querySelector('form').onsubmit = event => {
+  event.preventDefault()
+  if (document.querySelector('#save').disabled) return
+  const ids = ['sale-date', 'receipt-date', 'net', 'payout']
+  const values = ids.map(id => document.getElementById(id).value)
+  document.querySelector('#receipt').textContent = JSON.stringify(values)
+  document.querySelector('#saved').hidden = false
+}
+</script>
+</html>

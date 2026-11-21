@@ -1,0 +1,26 @@
+{
+  "ifood": {
+    "ready": "",
+    "open": [],
+    "sale_date": "",
+    "receipt_date": "",
+    "query": "",
+    "confirmed_sale_date": "",
+    "confirmed_receipt_date": "",
+    "fee_sign": 1,
+    "adjustment_sign": 1,
+    "totals": {
+      "gross": "",
+      "fees": "",
+      "adjustments": "",
+      "net": "",
+      "payout": ""
+    }
+  },
+  "premier": {
+    "ready": "",
+    "open": [],
+    "allow_unsaved_fill": false,
+    "fields": {}
+  }
+}

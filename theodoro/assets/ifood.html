@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="pt-BR"><meta charset="utf-8"><title>iFood fictício</title>
+<h1>iFood fictício</h1>
+<button id="finance" onclick="document.querySelector('main').hidden=false">Financeiro</button>
+<main hidden>
+<label>Data das vendas <input type="date" id="sales"></label>
+<label>Data dos recebimentos <input type="date" id="received"></label>
+<button id="query" onclick="runQuery()">Consultar</button>
+<section id="result" hidden>
+<p>Vendas brutas <output id="gross">100,00</output></p>
+<p>Taxas <output id="fees">-12,50</output></p>
+<p>Descontos e ajustes <output id="adjustments">-2,50</output></p>
+<p>Vendas líquidas <output id="net">85,00</output></p>
+<p>Repasses recebidos <output id="payout">80,00</output></p>
+<p>Data das vendas <output id="sales-result"></output></p>
+<p>Data dos recebimentos <output id="received-result"></output></p>
+</section>
+</main>
+<script>
+function runQuery() {
+  document.querySelector('#sales-result').textContent = document.querySelector('#sales').value
+  document.querySelector('#received-result').textContent = document.querySelector('#received').value
+  document.querySelector('#result').hidden = false
+}
+</script>
+</html>

@@ -1,0 +1,21 @@
+{
+  "ifood": {
+    "open": ["#finance"],
+    "sale_date": "#sales",
+    "receipt_date": "#received",
+    "query": "#query",
+    "confirmed_sale_date": "#sales-result",
+    "confirmed_receipt_date": "#received-result",
+    "totals": {
+      "gross": "#gross", "fees": "#fees", "adjustments": "#adjustments",
+      "net": "#net", "payout": "#payout"
+    }
+  },
+  "premier": {
+    "open": ["#finance"],
+    "fields": {
+      "sale_date": "#sale-date", "receipt_date": "#receipt-date",
+      "net": "#net", "payout": "#payout"
+    }
+  }
+}
