@@ -116,13 +116,16 @@ class OpenChrome:
         # Chrome can shorten the accessible address bar text. The root Document's
         # accessibility value is provided by the browser and may retain its URL.
         document_address = None
-        from pywinauto.uia_defines import NoPatternInterfaceError
+        from pywinauto.uia_defines import NoPatternInterfaceError, get_elem_interface
         from comtypes import COMError
 
-        try:
-            document_address = document.iface_legacy_iaccessible.CurrentValue
-        except (NoPatternInterfaceError, COMError):
-            pass
+        for pattern in ('Value', 'LegacyIAccessible'):
+            try:
+                document_address = get_elem_interface(document.element_info.element, pattern).CurrentValue
+                if document_address:
+                    break
+            except (NoPatternInterfaceError, COMError):
+                continue
         if len(addresses) > 1:
             raise ValueError('O Chrome expôs mais de uma barra de endereço candidata.')
         address = addresses[0] if addresses else ''
