@@ -23,7 +23,6 @@ class OpenWindowTab(QWidget):
         except (OSError, ValueError):
             self.profiles = {}
         self.inspected = None
-        self.active = False
 
         layout = QVBoxLayout(self)
         guide = QLabel('Abra o Chrome manualmente e deixe visível a aba do formulário novo. '
@@ -107,7 +106,6 @@ class OpenWindowTab(QWidget):
         self.dispatch('window_inspect', (target, self.demo.isChecked()))
 
     def set_busy(self, busy, active=False):
-        self.active = active
         for widget in (self.demo, self.demo_path, self.refresh, self.windows, self.inspect,
                        self.form, self.confirm, self.prepare):
             widget.setEnabled(not busy)
@@ -133,7 +131,7 @@ class OpenWindowTab(QWidget):
                 picker.addItems(result['fields'])
                 picker.setCurrentIndex(max(0, picker.findData(saved.get('mapping', {}).get(key), Qt.ItemDataRole.DisplayRole)))
             self.date.setCurrentIndex(max(0, self.date.findData(saved.get('date_format', 'br'))))
-            self.inspected = (self.windows.currentData(), self.demo.isChecked())
+            self.inspected = (self.windows.currentData(), self.demo.isChecked(), result['token'])
             self.status.setText('Campos disponíveis. Relacione cada valor ao campo de destino.')
         else:
             self.preview_text.setPlainText('\n'.join(f'{FIELDS[key]}: {value}' for key, value in result['values'].items()))
@@ -144,7 +142,7 @@ class OpenWindowTab(QWidget):
         self.clear_preview()
         approved = self.approved_summary()
         target = (self.windows.currentData(), self.demo.isChecked())
-        if target[0] is None or self.inspected != target:
+        if target[0] is None or self.inspected is None or self.inspected[:2] != target:
             self.status.setText('Selecione e inspecione a janela antes de preparar a prévia.')
             return
         if not approved:
@@ -178,7 +176,7 @@ class OpenWindowTab(QWidget):
             )
             lines.append(f'{FIELDS[key]} → {name}: {value}')
         self.preview_text.setPlainText('\n'.join(lines))
-        self.snapshot = (import_id, dict(summary), *target, mapping, date_format)
+        self.snapshot = (import_id, dict(summary), *target, mapping, date_format, self.inspected[2])
         self.status.setText('Confira a prévia e a aba ativa no Chrome antes de preencher.')
         self.apply.setEnabled(True)
 

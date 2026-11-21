@@ -134,13 +134,13 @@ class OpenChrome:
         return {name: field for name, field in fields.items() if name not in duplicates}
 
     def inspect(self, selected, demo):
-        document, _ = self.target(selected, demo)
+        document, token = self.target(selected, demo)
         fields = sorted(self.fields(document))
         if not fields:
             raise ValueError('Nenhum campo editável com nome acessível único e suporte a ValuePattern. Use o fluxo existente.')
-        return fields
+        return fields, token
 
-    def fill(self, selected, demo, mapping, summary, date_format):
+    def fill(self, selected, demo, mapping, summary, date_format, expected_target=None):
         if not mapping or set(mapping) - FIELDS.keys() or len(set(mapping.values())) != len(mapping):
             raise ValueError('Selecione campos distintos no mapeamento assistido.')
         missing = [FIELDS[key] for key in mapping if summary.get(key) is None]
@@ -153,6 +153,8 @@ class OpenChrome:
         }
 
         document, original = self.target(selected, demo)
+        if expected_target is not None and original != expected_target:
+            raise ValueError('A aba ou página mudou desde a inspeção. Inspecione novamente.')
 
         def verified_fields():
             current, token = self.target(selected, demo)

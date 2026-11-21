@@ -42,7 +42,7 @@ try {
     Write-Host $report
     $diagnostics = $report | ConvertFrom-Json
     if ($process.ExitCode -ne 0 -or $diagnostics.status -ne 'passed') {
-        throw 'O diagnóstico de navegadores falhou no pacote final do Theodoro.'
+        throw "O diagnóstico de navegadores falhou no pacote final. $($diagnostics.diagnostic)"
     }
     if ($env:GITHUB_ACTIONS -eq 'true' -and $diagnostics.chrome_janela_apos_retorno_qt -ne 'passed') {
         throw 'A validação visual do Google Chrome é obrigatória no GitHub Actions.'

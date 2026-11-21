@@ -27,7 +27,8 @@ def verify_open_chrome():
                         if pid != chrome.pid:
                             continue
                         candidate = (handle, pid)
-                        if 'Vendas líquidas' in adapter.inspect(candidate, True):
+                        fields, token = adapter.inspect(candidate, True)
+                        if 'Vendas líquidas' in fields:
                             selected = candidate
                             break
                 except Exception as error:
@@ -39,7 +40,7 @@ def verify_open_chrome():
                 raise RuntimeError('O formulário fictício em Chrome externo não foi acessível.') from last_error
             result = adapter.fill(
                 selected, True, {'net': 'Vendas líquidas', 'sale_date': 'Data da venda'},
-                {'net': 13000, 'sale_date': '2026-11-20'}, 'br',
+                {'net': 13000, 'sale_date': '2026-11-20'}, 'br', token,
             )
             if result != {'net': '130,00', 'sale_date': '20/11/2026'}:
                 raise RuntimeError('A releitura dos controles de acessibilidade divergiu.')

@@ -126,13 +126,14 @@ class Worker(QObject):
         if action == 'window_list':
             return {'windows': self.open_chrome.windows()}
         if action == 'window_inspect':
-            return {'fields': self.open_chrome.inspect(*options)}
+            fields, token = self.open_chrome.inspect(*options)
+            return {'fields': fields, 'token': token}
         if action == 'window_fill':
-            import_id, summary, target, demo, mapping, date_format = options
+            import_id, summary, target, demo, mapping, date_format, token = options
             record = {'importacao': import_id, 'estabelecimento': summary['store'],
                       'dia': summary['day'], 'simulacao': demo, 'premier': 'falha'}
             try:
-                values = self.open_chrome.fill(target, demo, mapping, summary, date_format)
+                values = self.open_chrome.fill(target, demo, mapping, summary, date_format, token)
             except Exception as error:
                 log_error('preenchimento_janela', error)
                 self.history.record('ifood_premier_janela', record)
