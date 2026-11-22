@@ -11,15 +11,17 @@ from .open_window import AccessibilityUnavailable, DEMO_PATH, OpenChrome
 EXPECTED = {'net': '130,00', 'sale_date': '20/11/2026'}
 
 
-def wait_for_window(adapter, pid, excluded=()):
-    deadline = monotonic() + 15
+def wait_for_window(adapter, pid, title, excluded=()):
+    deadline = monotonic() + 25
     while monotonic() < deadline:
-        windows = [(handle, owner) for handle, owner, _ in adapter.windows()
-                   if owner == pid and handle not in excluded]
+        windows = [(handle, owner) for handle, owner, caption in adapter.windows()
+                   if owner == pid and handle not in excluded and title in caption]
         if len(windows) == 1:
             return windows[0]
         sleep(0.4)
-    raise RuntimeError('O teste não encontrou a janela Chrome esperada.')
+    raise AccessibilityUnavailable(
+        f'O Chrome do runner não disponibilizou uma janela de teste identificada como {title} no prazo.'
+    )
 
 
 def inspect_fixture(adapter, selected):
@@ -52,7 +54,7 @@ def verify_open_chrome():
         ]
         chrome = subprocess.Popen([*command, DEMO_PATH.resolve().as_uri()])
         try:
-            selected = wait_for_window(adapter, chrome.pid)
+            selected = wait_for_window(adapter, chrome.pid, 'Theodoro – formulário fictício')
             token = inspect_fixture(adapter, selected)
             unavailable = None
             try:
@@ -64,8 +66,8 @@ def verify_open_chrome():
                     raise RuntimeError('A releitura da janela única divergiu.')
             except AccessibilityUnavailable as error:
                 unavailable = error
-            subprocess.Popen([*command, 'about:blank'])
-            other = wait_for_window(adapter, chrome.pid, excluded=(selected[0],))
+            subprocess.Popen([*command, 'data:text/html,%3Ctitle%3ETheodoro%20janela%20auxiliar%3C/title%3E'])
+            other = wait_for_window(adapter, chrome.pid, 'Theodoro janela auxiliar', excluded=(selected[0],))
             try:
                 adapter.inspect(other, True)
             except AccessibilityUnavailable:
