@@ -66,6 +66,15 @@ class DocumentSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(AccessibilityUnavailable, 'ambígua'):
             select_document([other, first, repeated], fixture, 'Theodoro', True)
 
+    def test_unrelated_selected_tab_groups_do_not_override_the_committed_url(self):
+        from theodoro.open_window import DocumentIdentity, select_document
+
+        fixture = DEMO_PATH.resolve().as_uri()
+        target = DocumentIdentity('a', fixture, 'Theodoro')
+        panel = DocumentIdentity('b', 'chrome://settings/', 'Painel')
+        selected, _ = select_document([target, panel], fixture, ['Theodoro', 'Painel'], True)
+        self.assertEqual(selected, target)
+
     def test_single_unidentified_document_is_not_assumed_to_be_active(self):
         from theodoro.open_window import AccessibilityUnavailable, DocumentIdentity, select_document
 

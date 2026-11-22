@@ -67,7 +67,7 @@ def address_key(value, demo):
     return (parts.hostname, parts.port or 443, parts.path or '/', parts.query, parts.fragment)
 
 
-def select_document(documents, address, tab_title, demo):
+def select_document(documents, address, tab_titles, demo):
     """Require committed URL evidence and reject competing active document candidates."""
     address = address.strip()
     if address and not approved_address(address, demo):
@@ -81,16 +81,19 @@ def select_document(documents, address, tab_title, demo):
     if not documents:
         raise AccessibilityUnavailable('O Chrome não expôs um documento principal visível na janela selecionada.')
 
-    titles = [doc for doc in documents if tab_title and doc.title.strip() == tab_title.strip()]
+    if isinstance(tab_titles, str):
+        tab_titles = (tab_titles,)
+    tab_titles = {title.strip() for title in tab_titles if title and title.strip()}
+    titles = [doc for doc in documents if doc.title.strip() in tab_titles]
     matching = [
         doc for doc in documents
         if doc.address and approved_address(doc.address, demo)
         and (not displayed or address_key(doc.address, demo) == address_key(displayed, demo))
     ]
-    if tab_title and (matching_titled := [doc for doc in matching if doc in titles]):
+    if matching_titled := [doc for doc in matching if doc in titles]:
         matching = matching_titled
     if not address:
-        matching = [doc for doc in matching if doc in titles]
+        matching = [doc for doc in matching if len(tab_titles) == 1 and doc in titles]
     if len(matching) > 1:
         raise AccessibilityUnavailable(f'Página ambígua: {len(matching)} documentos principais correspondem ao endereço da aba.')
     if matching:
@@ -103,13 +106,13 @@ def select_document(documents, address, tab_title, demo):
     # require both a complete approved omnibox address and a unique selected
     # tab title matched to a root document; never accept a conflicting URL.
     if approved_address(address, demo) and titles:
-        if len(titles) == 1 and not titles[0].address:
+        if len(tab_titles) == 1 and len(titles) == 1 and not titles[0].address:
             return titles[0], address
         if len(titles) > 1:
             raise AccessibilityUnavailable(f'Página ambígua: {len(titles)} documentos têm o título da aba selecionada.')
     raise AccessibilityUnavailable(
         f'A acessibilidade não confirmou o documento da aba ativa ({len(documents)} raízes visíveis, '
-        f'barra confirmável: {bool(displayed)}, aba identificada: {bool(tab_title)}).'
+        f'barra confirmável: {bool(displayed)}, abas selecionadas reportadas: {len(tab_titles)}).'
     )
 
 
@@ -207,13 +210,14 @@ class OpenChrome:
             ):
                 if info.element.CurrentHasKeyboardFocus:
                     raise ValueError('Saia da barra de endereço e confira a página selecionada no Chrome.')
-                addresses.append(control.iface_value.CurrentValue)
+                if value := control.iface_value.CurrentValue:
+                    addresses.append(value.strip())
             else:
                 waiting.extend(raw_children(control))
-        if len(addresses) > 1 or len(tabs) > 1:
-            raise AccessibilityUnavailable('Página ambígua: o Chrome expôs mais de uma barra ou aba selecionada.')
-        identity, approved = select_document(documents, addresses[0] if addresses else '',
-                                             tabs[0] if tabs else '', demo)
+        addresses = set(addresses)
+        if len(addresses) > 1:
+            raise AccessibilityUnavailable('Página ambígua: o Chrome expôs barras de endereço com valores diferentes.')
+        identity, approved = select_document(documents, next(iter(addresses), ''), tabs, demo)
         document = identity.control
         token = (approved, tuple(document.element_info.element.GetRuntimeId()))
         return document, token
