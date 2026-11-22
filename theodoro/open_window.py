@@ -3,6 +3,7 @@ import ctypes
 import sys
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
+from time import monotonic
 from urllib.parse import unquote, urlsplit
 
 from .browser_choices import channel_executable
@@ -296,14 +297,29 @@ class OpenChrome:
                     raise ValueError
                 if value.CurrentValue != values[key]:
                     value.SetValue(values[key])
-                self.check()
-                if value.CurrentValue != values[key]:
-                    raise ValueError
+                # Chrome can acknowledge SetValue before the renderer publishes
+                # the new accessibility value. Reacquire the control before reading.
+                deadline = monotonic() + 3
+                while True:
+                    self.check()
+                    refreshed = verified_fields().get(name)
+                    if refreshed is None:
+                        raise ValueError('O controle deixou de estar disponível após a escrita.')
+                    if refreshed.iface_value.CurrentValue == values[key]:
+                        break
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        raise AccessibilityUnavailable(
+                            'O Chrome aceitou SetValue, mas não confirmou o novo valor pela acessibilidade.'
+                        )
+                    self.stop.wait(min(0.1, remaining))
                 completed += 1
             except Exception as error:
-                raise ValueError(
+                failure = AccessibilityUnavailable if isinstance(error, AccessibilityUnavailable) else ValueError
+                raise failure(
                     f'Preenchimento interrompido em {FIELDS[key]}. '
                     f'Campos confirmados até então: {completed}. Confira a página manualmente.'
+                    + (f' {error}' if isinstance(error, AccessibilityUnavailable) else '')
                 ) from error
         final = verified_fields()
         self.check()

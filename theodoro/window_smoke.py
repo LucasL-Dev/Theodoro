@@ -54,12 +54,16 @@ def verify_open_chrome():
         try:
             selected = wait_for_window(adapter, chrome.pid)
             token = inspect_fixture(adapter, selected)
-            result = adapter.fill(
-                selected, True, {'net': 'Vendas líquidas', 'sale_date': 'Data da venda'},
-                {'net': 13000, 'sale_date': '2026-11-20'}, 'br', token,
-            )
-            if result != EXPECTED:
-                raise RuntimeError('A releitura da janela única divergiu.')
+            unavailable = None
+            try:
+                result = adapter.fill(
+                    selected, True, {'net': 'Vendas líquidas', 'sale_date': 'Data da venda'},
+                    {'net': 13000, 'sale_date': '2026-11-20'}, 'br', token,
+                )
+                if result != EXPECTED:
+                    raise RuntimeError('A releitura da janela única divergiu.')
+            except AccessibilityUnavailable as error:
+                unavailable = error
             subprocess.Popen([*command, 'about:blank'])
             other = wait_for_window(adapter, chrome.pid, excluded=(selected[0],))
             try:
@@ -69,6 +73,10 @@ def verify_open_chrome():
             else:
                 raise RuntimeError('O teste aceitou a outra janela do Chrome.')
             token = inspect_fixture(adapter, selected)
+            if unavailable:
+                raise AccessibilityUnavailable(
+                    'Inspeção confirmada com uma aba, iframe e duas janelas. ' + str(unavailable)
+                ) from unavailable
             result = adapter.fill(
                 selected, True, {'net': 'Vendas líquidas', 'sale_date': 'Data da venda'},
                 {'net': 13000, 'sale_date': '2026-11-20'}, 'br', token,
