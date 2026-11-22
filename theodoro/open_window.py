@@ -1,6 +1,7 @@
 """Windows UI Automation adapter for an explicitly chosen Chrome window."""
 import ctypes
 import sys
+from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
@@ -48,6 +49,82 @@ def approved_address(address, demo):
                 and parsed.port in {None, 443} and parsed.username is None and parsed.password is None)
     except ValueError:
         return False
+
+
+@dataclass
+class DocumentIdentity:
+    control: object
+    address: str
+    title: str
+
+
+def address_key(value, demo):
+    if demo and PureWindowsPath(value).is_absolute():
+        value = PureWindowsPath(value).as_uri()
+    parts = urlsplit(value)
+    if demo:
+        return unquote(parts.path).casefold()
+    return (parts.hostname, parts.port or 443, parts.path or '/', parts.query, parts.fragment)
+
+
+def select_document(documents, address, tab_title, demo):
+    """Require committed URL evidence and reject competing active document candidates."""
+    address = address.strip()
+    if address and not approved_address(address, demo):
+        # Chrome can omit https from the omnibox. Only corroborate an HTTPS
+        # URL supplied independently by the document's accessibility provider.
+        if demo or '://' in address or not approved_address('https://' + address, False):
+            raise AccessibilityUnavailable('O endereço ativo do Chrome não corresponde ao destino esperado.')
+        displayed = 'https://' + address
+    else:
+        displayed = address
+    if not documents:
+        raise AccessibilityUnavailable('O Chrome não expôs um documento principal visível na janela selecionada.')
+
+    titles = [doc for doc in documents if tab_title and doc.title.strip() == tab_title.strip()]
+    matching = [
+        doc for doc in documents
+        if doc.address and approved_address(doc.address, demo)
+        and (not displayed or address_key(doc.address, demo) == address_key(displayed, demo))
+    ]
+    if tab_title and (matching_titled := [doc for doc in matching if doc in titles]):
+        matching = matching_titled
+    if not address:
+        matching = [doc for doc in matching if doc in titles]
+    if len(matching) > 1:
+        raise AccessibilityUnavailable(f'Página ambígua: {len(matching)} documentos principais correspondem ao endereço da aba.')
+    if matching:
+        doc = matching[0]
+        if titles and doc not in titles:
+            raise AccessibilityUnavailable('O documento com o endereço esperado não corresponde à aba selecionada.')
+        return doc, doc.address
+
+    # Some Chrome providers omit the URL on the document. In that case,
+    # require both a complete approved omnibox address and a unique selected
+    # tab title matched to a root document; never accept a conflicting URL.
+    if approved_address(address, demo) and titles:
+        if len(titles) == 1 and not titles[0].address:
+            return titles[0], address
+        if len(titles) > 1:
+            raise AccessibilityUnavailable(f'Página ambígua: {len(titles)} documentos têm o título da aba selecionada.')
+    raise AccessibilityUnavailable(
+        f'A acessibilidade não confirmou o documento da aba ativa ({len(documents)} raízes visíveis, '
+        f'barra confirmável: {bool(displayed)}, aba identificada: {bool(tab_title)}).'
+    )
+
+
+def read_document_url(control):
+    from comtypes import COMError
+    from pywinauto.uia_defines import NoPatternInterfaceError, get_elem_interface
+
+    for pattern in ('Value', 'LegacyIAccessible'):
+        try:
+            value = get_elem_interface(control.element_info.element, pattern).CurrentValue
+            if value and urlsplit(value).scheme in {'https', 'http', 'file', 'chrome', 'about', 'devtools'}:
+                return value.strip()
+        except (NoPatternInterfaceError, COMError, ValueError):
+            continue
+    return ''
 
 
 def native_process_path(pid):
@@ -99,23 +176,32 @@ class OpenChrome:
 
     def target(self, selected, demo):
         self.check()
+        desktop = windows_api()
+        from pywinauto.uia_defines import NoPatternInterfaceError
+
         handle, pid = selected
-        window = windows_api()(backend='uia').window(handle=handle).wrapper_object()
+        window = desktop(backend='uia').window(handle=handle).wrapper_object()
         executable = channel_executable('chrome')
         if (window.element_info.process_id != pid or window.class_name() != 'Chrome_WidgetWin_1'
                 or executable is None or native_process_path(pid) != executable.resolve()):
             raise ValueError('A janela selecionada mudou. Selecione novamente o Chrome.')
         # Walk the browser UI only. A page input must never stand in for Chrome’s address bar.
         waiting = list(raw_children(window))
-        addresses, documents = [], []
+        addresses, documents, tabs = [], [], []
         while waiting:
             self.check()
             control = waiting.pop()
             info = control.element_info
             if info.control_type == 'Document':
                 if not info.element.CurrentIsOffscreen:
-                    documents.append(control)
+                    documents.append(DocumentIdentity(control, read_document_url(control), info.name or ''))
                 continue
+            if info.control_type == 'TabItem' and not info.element.CurrentIsOffscreen:
+                try:
+                    if control.iface_selection_item.CurrentIsSelected:
+                        tabs.append(info.name)
+                except NoPatternInterfaceError:
+                    pass
             if info.control_type == 'Edit' and not info.element.CurrentIsOffscreen and (
                 info.name.casefold() in ADDRESS_NAMES or info.automation_id.casefold() in ADDRESS_IDS
             ):
@@ -124,43 +210,27 @@ class OpenChrome:
                 addresses.append(control.iface_value.CurrentValue)
             else:
                 waiting.extend(raw_children(control))
-        if len(documents) != 1:
-            raise AccessibilityUnavailable(f'O Chrome expôs {len(documents)} documentos ativos. Selecione uma janela com apenas a aba de destino visível.')
-        document = documents[0]
-        # Chrome can shorten the accessible address bar text. The root Document's
-        # accessibility value is provided by the browser and may retain its URL.
-        document_address = None
-        from pywinauto.uia_defines import NoPatternInterfaceError, get_elem_interface
-        from comtypes import COMError
-
-        for pattern in ('Value', 'LegacyIAccessible'):
-            try:
-                document_address = get_elem_interface(document.element_info.element, pattern).CurrentValue
-                if document_address:
-                    break
-            except (NoPatternInterfaceError, COMError):
-                continue
-        if len(addresses) > 1:
-            raise ValueError('O Chrome expôs mais de uma barra de endereço candidata.')
-        address = addresses[0] if addresses else ''
-        approved = next((item for item in (document_address, address) if item and approved_address(item, demo)), None)
-        if not approved:
-            raise AccessibilityUnavailable(
-                'A API de acessibilidade não confirmou o endereço esperado '
-                f'(barra detectada: {bool(addresses)}; URL no documento: {bool(document_address)}). '
-                'Abra a página correta e selecione a janela novamente.'
-            )
-        if address and urlsplit(address).scheme in {'http', 'https', 'file'} and not approved_address(address, demo):
-            raise ValueError('O endereço ativo do Chrome não corresponde ao destino esperado.')
+        if len(addresses) > 1 or len(tabs) > 1:
+            raise AccessibilityUnavailable('Página ambígua: o Chrome expôs mais de uma barra ou aba selecionada.')
+        identity, approved = select_document(documents, addresses[0] if addresses else '',
+                                             tabs[0] if tabs else '', demo)
+        document = identity.control
         token = (approved, tuple(document.element_info.element.GetRuntimeId()))
         return document, token
 
     def fields(self, document):
         fields = {}
         duplicates = set()
-        for field in document.descendants(control_type='Edit'):
+        waiting = list(raw_children(document))
+        while waiting:
             self.check()
+            field = waiting.pop()
             info = field.element_info
+            if info.control_type == 'Document':
+                continue
+            if info.control_type != 'Edit':
+                waiting.extend(raw_children(field))
+                continue
             if (not info.name or not field.is_visible() or not field.is_enabled()
                     or info.element.CurrentIsPassword or info.element.CurrentIsOffscreen):
                 continue

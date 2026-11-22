@@ -1,4 +1,4 @@
-"""Emulate manual Chrome launch from outside the accessibility adapter."""
+"""Exercise an independently launched Chrome through native Windows accessibility."""
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,53 +8,78 @@ from time import monotonic, sleep
 from .browser_choices import channel_executable
 from .open_window import AccessibilityUnavailable, DEMO_PATH, OpenChrome
 
+EXPECTED = {'net': '130,00', 'sale_date': '20/11/2026'}
+
+
+def wait_for_window(adapter, pid, excluded=()):
+    deadline = monotonic() + 15
+    while monotonic() < deadline:
+        windows = [(handle, owner) for handle, owner, _ in adapter.windows()
+                   if owner == pid and handle not in excluded]
+        if len(windows) == 1:
+            return windows[0]
+        sleep(0.4)
+    raise RuntimeError('O teste não encontrou a janela Chrome esperada.')
+
+
+def inspect_fixture(adapter, selected):
+    deadline = monotonic() + 15
+    while True:
+        try:
+            fields, token = adapter.inspect(selected, True)
+            break
+        except AccessibilityUnavailable:
+            if monotonic() >= deadline:
+                raise
+            sleep(0.4)
+    if not {'Vendas líquidas', 'Data da venda'}.issubset(fields):
+        raise RuntimeError('Os campos do documento principal não foram expostos.')
+    if 'Campo aninhado' in fields:
+        raise RuntimeError('Um campo do iframe foi confundido com o formulário principal.')
+    return token
+
 
 def verify_open_chrome():
+    import win32con
+    import win32gui
+
     adapter = OpenChrome(Event())
     with TemporaryDirectory() as folder:
-        chrome = subprocess.Popen([
+        command = [
             str(channel_executable('chrome')),
             f'--user-data-dir={Path(folder) / "chrome"}', '--no-first-run',
-            '--new-window', DEMO_PATH.resolve().as_uri(),
-        ])
+            '--new-window',
+        ]
+        chrome = subprocess.Popen([*command, DEMO_PATH.resolve().as_uri()])
         try:
-            selected = None
-            deadline = monotonic() + 20
-            last_error = None
-            while monotonic() < deadline:
-                try:
-                    for handle, pid, _ in adapter.windows():
-                        if pid != chrome.pid:
-                            continue
-                        candidate = (handle, pid)
-                        fields, token = adapter.inspect(candidate, True)
-                        if 'Vendas líquidas' in fields:
-                            selected = candidate
-                            break
-                except Exception as error:
-                    last_error = error
-                if selected:
-                    break
-                sleep(0.5)
-            if selected is None:
-                if isinstance(last_error, AccessibilityUnavailable):
-                    raise last_error
-                raise RuntimeError('O formulário fictício em Chrome externo não foi acessível.') from last_error
+            selected = wait_for_window(adapter, chrome.pid)
+            token = inspect_fixture(adapter, selected)
             result = adapter.fill(
                 selected, True, {'net': 'Vendas líquidas', 'sale_date': 'Data da venda'},
                 {'net': 13000, 'sale_date': '2026-11-20'}, 'br', token,
             )
-            if result != {'net': '130,00', 'sale_date': '20/11/2026'}:
-                raise RuntimeError('A releitura dos controles de acessibilidade divergiu.')
-        finally:
-            if selected:
-                import win32con
-                import win32gui
-
-                win32gui.PostMessage(selected[0], win32con.WM_CLOSE, 0, 0)
+            if result != EXPECTED:
+                raise RuntimeError('A releitura da janela única divergiu.')
+            subprocess.Popen([*command, 'about:blank'])
+            other = wait_for_window(adapter, chrome.pid, excluded=(selected[0],))
             try:
-                if not selected:
-                    chrome.terminate()
+                adapter.inspect(other, True)
+            except AccessibilityUnavailable:
+                pass
+            else:
+                raise RuntimeError('O teste aceitou a outra janela do Chrome.')
+            token = inspect_fixture(adapter, selected)
+            result = adapter.fill(
+                selected, True, {'net': 'Vendas líquidas', 'sale_date': 'Data da venda'},
+                {'net': 13000, 'sale_date': '2026-11-20'}, 'br', token,
+            )
+            if result != EXPECTED:
+                raise RuntimeError('A releitura com múltiplas janelas divergiu.')
+        finally:
+            try:
+                for handle, pid, _ in adapter.windows():
+                    if pid == chrome.pid:
+                        win32gui.PostMessage(handle, win32con.WM_CLOSE, 0, 0)
                 chrome.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 chrome.kill()
